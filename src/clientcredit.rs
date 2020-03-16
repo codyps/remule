@@ -30,10 +30,41 @@ struct CreditStruct {
 }
 */
 
+// is this actually stored to disk like this? seems like a lot of space to use
+// up if we encode the length anyhow.
+const MAX_PUBKEYSIZE: usize = 80;
+
+// emule marks these with pragma pack(1), check if we need any explicit padding
+#[repr(C)]
+ struct CreditData29a {
+    key: [u8;16],
+    upload_lo: u32,
+    download_lo: u32,
+
+    last_seen: u32, // 32-bit seconds since-epoch
+
+    uploaded_hi: u32,
+    downloaded_hi: u32,
+    reserved: u16,
+}
+
+#[repr(C)]
+struct CreditData {
+    base: CreditData29a,
+    // these only exist in version 0x12, not 0x11
+    key_size: u8,
+    aby_secure_ident: [u8;MAX_PUBKEYSIZE]
+}
+
+
+
+#[derive(Default, Debug)]
 struct ClientCredit {
+    key: [u8;16],
     downloaded: u64,
     uploaded: u64,
     last_seen: std::time::SystemTime,
+    secure_ident: Vec<u8>,
 }
 
 pub fn parse(inp: &[u8]) -> Result<Vec<ClientCredit>, Box<dyn Error>> {
@@ -56,14 +87,22 @@ pub fn parse(inp: &[u8]) -> Result<Vec<ClientCredit>, Box<dyn Error>> {
     }
 
     let count = u32::from_le_buf(rem[..4].try_into().unwrap());
+    // TODO: check length
 
-    match version {
-        CREDITFILE_VERSION_29 => {
+    let n = count * std::mem::size_of<CreditData29a>();
 
-        },
-        CREDITFILE_VERSION => {
+    for _ in 0..count {
+        let mut cc = ClientCredit::default();
+        match version {
+            CREDITFILE_VERSION_29|CREDITFILE_VERSION => {
+                // load common fields
+            
+            },
+            _ => panic!()
+        }
 
-        },
-        _ => panic!()
+        if version == CREDITFILE_VERSION {
+            // load extra fields from version 0x12
+        }
     }
 }
