@@ -56,11 +56,17 @@ version = "0.2.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "plain"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "remule"
 version = "0.1.0"
 dependencies = [
  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "fmt-extra 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "plain 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -113,6 +119,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum fmt-extra 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "07f11f71b1f9be830047fbb1899d90601c3b21a471dc99fe1057303eee37f2b9"
 "checksum hermit-abi 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)" = "1010591b26bbfe835e9faeabeb11866061cc7dcebffd56ad7d0942d0e61aefd8"
 "checksum libc 0.2.67 (registry+https://github.com/rust-lang/crates.io-index)" = "eb147597cdf94ed43ab7a9038716637d2d1bf2bc571da995d0028dec06bd3018"
+"checksum plain 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 "checksum strsim 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
 "checksum textwrap 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
 "checksum unicode-width 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "caaa9d531767d1ff2150b9332433f32a24622147e5ebb1f26409d5da67afd479"
