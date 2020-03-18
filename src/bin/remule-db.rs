@@ -14,6 +14,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             .arg(Arg::with_name("clients-met")
                 .required(true)
                 .index(1)))
+        .subcommand(SubCommand::with_name("nodes")
+            .arg(Arg::with_name("nodes-dat")
+                .required(true)
+                .index(1)))
         .get_matches();
 
     match matches.subcommand() {
@@ -38,6 +42,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let mut b = Vec::default();
                         h.read_to_end(&mut b)?;
                         println!("{:?}", remule::clientcredit::parse(&mut b));
+                    },
+                    Err(e) => {
+                        eprintln!("error: could not open {:?}: {:?}", f, e);
+                    }
+                }
+            }
+
+        },
+        ("nodes", Some(submatches)) => {
+            for f in submatches.values_of_os("nodes-dat").unwrap() {
+                match std::fs::File::open(f) {
+                    Ok(mut h) => {
+                        let mut b = Vec::default();
+                        h.read_to_end(&mut b)?;
+                        println!("{:?}", remule::nodes::parse(&mut b));
                     },
                     Err(e) => {
                         eprintln!("error: could not open {:?}: {:?}", f, e);

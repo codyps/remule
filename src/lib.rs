@@ -1,5 +1,6 @@
 pub mod known2;
 pub mod clientcredit;
+pub mod nodes;
 
 // AC_BootstrapIPs.dat
 // AC_IPFilterUpdateURLs.dat
