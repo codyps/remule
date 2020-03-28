@@ -14,14 +14,14 @@ pub struct Contact {
     pub tcp_port: u16,
 
     // version >= 1
-    pub contact_version: u8,
+    pub contact_version: Option<u8>,
     // version 0
     pub by_type: Option<u8>,
     // version >= 2
     // (key, ip)
     pub kad_udp_key: Option<(u32, u32)>,
     // version >= 2
-    pub verified: Option<bool>,    
+    pub verified: Option<u8>,    
 }
 
 #[derive(Debug)]
@@ -59,7 +59,7 @@ pub fn parse_bootstrap(inp: &[u8]) -> Result<Vec<Contact>, Box<dyn Error>> {
         rem = &rem[..2];
         let tcp_port = u16::from_le_bytes(rem[..2].try_into().unwrap());
         rem = &rem[..2];
-        let contact_version = rem[0];
+        let contact_version = Some(rem[0]);
         rem = &rem[..1];
 
         r.push(Contact {
@@ -77,7 +77,7 @@ pub fn parse_bootstrap(inp: &[u8]) -> Result<Vec<Contact>, Box<dyn Error>> {
     Ok(r)
 }
 
-pub fn parse(inp: &[u8]) -> Result<Vec<Contact>, Box<dyn Error>> {
+pub fn parse(inp: &[u8]) -> Result<Nodes, Box<dyn Error>> {
     let mut rem = inp;
 
     if rem.len() < 4 {
@@ -124,14 +124,65 @@ pub fn parse(inp: &[u8]) -> Result<Vec<Contact>, Box<dyn Error>> {
                 n, rem.len(), r.len(), count))?;
         }
 
+        let (mut s, rs) = rem.split_at(n);
+        let uid = u128::from_le_bytes(s[..16].try_into().unwrap());
+        s = &s[16..];
+        let ip = u32::from_le_bytes(s[..4].try_into().unwrap());
+        s = &s[4..];
+        let udp_port = u16::from_le_bytes(s[..2].try_into().unwrap());
+        s = &s[2..];
+        let tcp_port = u16::from_le_bytes(s[..2].try_into().unwrap());
+        s = &s[2..];
 
-        let c = todo!();
-        r.push(c);
+        let mut by_type = None;
+        let mut contact_version = None;
+        if version >= 1 {
+            contact_version = Some(s[0]);
+            s = &s[1..];
+        } else {
+            by_type = Some(s[0]);
+            s = &s[1..];
+        }
+
+        let mut verified = None;
+        let mut kad_udp_key = None;
+        if version >= 2 {
+            // kad udp key read
+            let dw_key = u32::from_le_bytes(s[..4].try_into().unwrap());
+            s = &s[4..];
+            let dw_ip = u32::from_le_bytes(s[..4].try_into().unwrap());
+            s = &s[4..];
+            kad_udp_key = Some((dw_key, dw_ip));
+
+            verified = Some(s[0]);
+            s = &s[1..];
+        }
+    
+        if s.len() != 0 {
+            Err(format!("spare bytes in entry {}: {} bytes, ", r.len(), s.len()))?;
+        }
+
+        rem = rs;
+
+        r.push(Contact {
+            uid,
+            contact_version,
+            verified,
+            udp_port,
+            tcp_port,
+            ip,
+            by_type,
+            kad_udp_key,
+        })
     }
 
     if rem.len() != 0 {
         Err(format!("spare bytes: {}", rem.len()))?;
     }
 
-    Ok(r)
+    Ok(Nodes {
+        version: version,
+        is_bootstrap: false,
+        contacts: r,         
+    })
 }
