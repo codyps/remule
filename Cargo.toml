@@ -10,3 +10,4 @@ edition = "2018"
 clap = "2.33.0"
 fmt-extra = "0.2.1"
 plain = "0.2.3"
+async-std = { version = "1.5.0", features = ["attributes"]}
