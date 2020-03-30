@@ -4,15 +4,21 @@ use std::io;
 use std::error::Error;
 use async_std::net;
 use std::collections::HashMap;
+use std::collections::hash_map;
 
 struct Peer {
-    last_contact: std::time::Instant,
+    last_contact: Option<std::time::Instant>,
+    last_addr: net::SocketAddr,
 }
 
 struct Kad {
     rx_buf: Vec<u8>,
     socket: net::UdpSocket,
 
+    // XXX: consider if SocketAddr is the right key. We may have Peers that roam (get a different
+    // IP address/port). We can identify this by using some features within the emule/kad protocol.
+    //
+    // Right now, we'll treat independent addresses as independent peers.
     peers: HashMap<net::SocketAddr, Peer>,
 }
 
@@ -22,17 +28,29 @@ impl Kad {
         Ok(Kad {
             socket,
             rx_buf: vec![0u8;1024],
+            peers: HashMap::default(),
         })
     }
 
-    async fn process(&mut self) -> Result<(), Box<dyn Error>> {
+    async fn process_rx(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
             let (recv, peer) = self.socket.recv_from(&mut self.rx_buf).await?;
+            // TODO: on linux we can use SO_TIMESTAMPING and recvmsg() to get more accurate timestamps
+            let ts = std::time::Instant::now();
             
-            // track rx timestamp?
+            // examine packet and decide if it looks like a valid emule/kad packet
+        
 
-
+            match self.peers.entry(peer) {
+                hash_map::Entry::Occupied(occupied) => {},
+                hash_map::Entry::Vacant(vacant) => {},
+            }
         }
+    }
+
+    async fn send_stuff(&mut self) -> Result<(), Box<dyn Error>> {
+        // XXX: maybe we can integrate this with the rx loop?
+        // Decide when we need to send out information based
     }
 }
 
