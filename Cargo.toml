@@ -11,3 +11,7 @@ clap = "2.33.0"
 fmt-extra = "0.2.1"
 plain = "0.2.3"
 async-std = { version = "1.5.0", features = ["attributes"]}
+enum-primitive-derive = "0.1.2"
+num-traits = "0.2"
+md5 = "0.7"
+arc4 = "0.1"

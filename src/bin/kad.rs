@@ -32,7 +32,7 @@ impl Kad {
         })
     }
 
-    async fn process_rx(&mut self) -> Result<(), Box<dyn Error>> {
+    async fn process(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
             let (recv, peer) = self.socket.recv_from(&mut self.rx_buf).await?;
             // TODO: on linux we can use SO_TIMESTAMPING and recvmsg() to get more accurate timestamps
@@ -51,6 +51,10 @@ impl Kad {
     async fn send_stuff(&mut self) -> Result<(), Box<dyn Error>> {
         // XXX: maybe we can integrate this with the rx loop?
         // Decide when we need to send out information based
+        
+        // examine our peers. if we haven't heard from them recently, poke them.
+        // otherwise, generate a timeout from the least recently heard one and repeat
+        todo!()
     }
 }
 
