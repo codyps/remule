@@ -3,58 +3,139 @@ use clap::{Arg, App, SubCommand, crate_name, crate_version, crate_authors};
 use std::io;
 use std::error::Error;
 use async_std::net;
+use async_std::stream;
 use std::collections::HashMap;
 use std::collections::hash_map;
+use std::time::Duration;
+use std::io::Read;
+use std::cell::RefCell;
+use futures::FutureExt;
+use fmt_extra::Hs;
 
 struct Peer {
     last_contact: Option<std::time::Instant>,
     last_addr: net::SocketAddr,
 }
 
+struct KadPeriodic {
+    bootstrap_idx: usize,
+    bootstraps: remule::nodes::Nodes,
+
+    timeout_bootstrap: stream::Interval,
+}
+
 struct Kad {
-    rx_buf: Vec<u8>,
+    rx_buf: RefCell<Vec<u8>>,
     socket: net::UdpSocket,
+
+    periodic: RefCell<KadPeriodic>,
 
     // XXX: consider if SocketAddr is the right key. We may have Peers that roam (get a different
     // IP address/port). We can identify this by using some features within the emule/kad protocol.
     //
     // Right now, we'll treat independent addresses as independent peers.
-    peers: HashMap<net::SocketAddr, Peer>,
+    peers: RefCell<HashMap<net::SocketAddr, Peer>>,
 }
 
 impl Kad {
-    async fn from_addr<A: net::ToSocketAddrs>(addrs: A) -> Result<Kad, io::Error> {
+    async fn from_addr<A: net::ToSocketAddrs>(addrs: A, bootstraps: remule::nodes::Nodes) -> Result<Kad, io::Error> {
         let socket = net::UdpSocket::bind(addrs).await?;
         Ok(Kad {
             socket,
-            rx_buf: vec![0u8;1024],
-            peers: HashMap::default(),
+            rx_buf: RefCell::new(vec![0u8;1024]),
+            peers: RefCell::new(HashMap::default()),
+
+            periodic: RefCell::new(KadPeriodic {
+                bootstraps,
+                bootstrap_idx: 0,
+                timeout_bootstrap: stream::interval(Duration::from_secs(2)),
+            }),
         })
     }
 
-    async fn process(&mut self) -> Result<(), Box<dyn Error>> {
-        loop {
-            let (recv, peer) = self.socket.recv_from(&mut self.rx_buf).await?;
-            // TODO: on linux we can use SO_TIMESTAMPING and recvmsg() to get more accurate timestamps
-            let ts = std::time::Instant::now();
-            
-            // examine packet and decide if it looks like a valid emule/kad packet
+    async fn process_rx(&self) -> Result<(), Box<dyn Error>> {
+        let mut rx_buf = self.rx_buf.borrow_mut();
+        let (recv, peer) = self.socket.recv_from(&mut rx_buf[..]).await?;
+        // TODO: on linux we can use SO_TIMESTAMPING and recvmsg() to get more accurate timestamps
+        let ts = std::time::Instant::now();
+        let rx_data = &rx_buf[..recv];
         
-
-            match self.peers.entry(peer) {
-                hash_map::Entry::Occupied(occupied) => {},
-                hash_map::Entry::Vacant(vacant) => {},
-            }
+        println!("peer: {:?} replied: {:?}", peer, Hs(rx_data));
+        // examine packet and decide if it looks like a valid emule/kad packet
+        match self.peers.borrow_mut().entry(peer) {
+            hash_map::Entry::Occupied(mut occupied) => {
+                println!("existing peer, last heard: {:?}", occupied.get().last_contact);
+                occupied.get_mut().last_contact = Some(ts);
+            },
+            hash_map::Entry::Vacant(vacant) => {
+                println!("new peer");
+                vacant.insert(Peer {
+                    last_contact: Some(ts),
+                    last_addr: peer,
+                });
+            },
         }
+
+        Ok(())
     }
 
-    async fn send_stuff(&mut self) -> Result<(), Box<dyn Error>> {
+    // in emule, the system runs the kademlia process every second, then internally it throttles to
+    // some amount of time:
+    //
+    //  - if collecting nodes, probe for a random one every 1 minute (used to generate bootstrap
+    //  nodes.dat)
+    //  - encodes a state machine around firewall/upnp
+    //  - probe ourselves every 4 hours
+    //  - find a buddy every 20 minutes
+    //  - determine our external port from a contact ever 15 seconds
+    //    - (by sending a Null packet to a random contact)
+    //  - some "big timer" that runs every 10 seconds & every 1 hour per "zone"
+    //  - small timer every 1 minute per "zone" 
+    //  - search jumpstart every X seconds
+    //  - zone consolidate every 45 minutes
+    //  - if unconnected, every 2 or 15 seconds bootstrap from one bootstrap contact.
+    //
+    //
+    //
+    //  Timers: (initial, reset)
+    //   - next_search_jump_start: (0, ?): 
+    //   - next_self_lookup: (3min, ?)
+    //   - status_update: (0, ?)
+    //   - big_timer: (0, ?)
+    //   - next_firewall_check: (1hr, ?)
+    //   - next_upnp_check: (1hr - 1min, ?)
+    //   - next_find_buddy: (5min, ?)
+    //   - consolidate: (45min, ?)
+    //   - extern_port_lookup: (0, ?)
+    //   - bootstrap: (None, ?)
+    async fn process(&self) -> Result<(), Box<dyn Error>> {
+        let mut periodic = self.periodic.borrow_mut();
+        periodic.timeout_bootstrap.next().await;
+
+
+        if self.peers.borrow().len() < 5 {
+            // send out some bootstraps
+            if periodic.bootstrap_idx >= periodic.bootstraps.contacts.len() {
+                println!("out of clients, restarting");
+                // XXX: doesn't immediately restart
+                periodic.bootstrap_idx = 0;
+            }
+
+            periodic.bootstrap_idx += 1;
+            let bsc = &periodic.bootstraps.contacts[periodic.bootstrap_idx - 1];
+
+            let mut out_buf = Vec::new();
+            remule::udp_proto::OperationBuf::BootstrapReq.write_to(&mut out_buf).unwrap();
+            // FIXME: this await should be elsewhere, we don't want to block other timers
+            self.socket.send_to(&out_buf[..], (std::net::Ipv4Addr::from(bsc.ip), bsc.udp_port)).await?;
+        }
+
+        Ok(())
         // XXX: maybe we can integrate this with the rx loop?
         // Decide when we need to send out information based
         
         // examine our peers. if we haven't heard from them recently, poke them.
         // otherwise, generate a timeout from the least recently heard one and repeat
-        todo!()
     }
 }
 
@@ -66,18 +147,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::with_name("bind-addr")
             .index(1)
             .required(true))
+        .arg(Arg::with_name("nodes.dat")
+            .index(2)
+            .required(true))
         .get_matches();
 
     let a = matches.value_of("bind-addr").unwrap();
 
-    let mut kad = Kad::from_addr(a).await?;
+    let nodes = {
+        let nodes_path = matches.value_of("nodes.dat").unwrap();
+        let mut f_nodes = std::fs::File::open(nodes_path)?;
+        let mut b = Vec::default();
+        f_nodes.read_to_end(&mut b)?;
+        remule::nodes::parse(&mut b)?
+    };
+
+    let mut kad = Kad::from_addr(a, nodes).await?;
 
     // setup udp port
     // simultaniously:
     //   - wait for incomming data
     //   - start sending probes to other nodes
 
-    kad.process().await?;
-
-    Ok(())
+    loop {
+        futures::select! {
+            e = kad.process_rx().fuse() => {
+                println!("process-rx?: {:?}", e);
+            },
+            e = kad.process().fuse() => {
+                println!("process?: {:?}", e);
+            }
+        }
+    }
 }
