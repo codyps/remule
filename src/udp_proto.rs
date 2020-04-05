@@ -317,8 +317,12 @@ impl<'a> BootstrapRespContact<'a> {
         u128::from_le_bytes(self.raw[..16].try_into().unwrap())
     }
 
-    pub fn ip_addr(&self) -> u32 {
+    pub fn raw_ip_addr(&self) -> u32 {
         u32::from_le_bytes(self.raw[16..(16 + 4)].try_into().unwrap())
+    }
+
+    pub fn ip_addr(&self) -> std::net::Ipv4Addr {
+        std::net::Ipv4Addr::from(self.raw_ip_addr())
     }
 
     pub fn udp_port(&self) -> u16 {
