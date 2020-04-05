@@ -2,6 +2,8 @@ use num_traits::FromPrimitive;
 use enum_primitive_derive::Primitive;
 use std::error::Error;
 use std::io;
+use std::fmt;
+use std::convert::TryInto;
 
 /// The first byte of a emule/kad udp packet _may_ be one of these bytes, which establishes the
 /// content of the packet.
@@ -83,6 +85,15 @@ impl<'a> Packet<'a> {
     }
 }
 
+impl<'a> fmt::Debug for Packet<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("Packet")
+            .field("kind", &self.kind())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 pub enum Kind<'a> {
     Kad(KadPacket<'a>),
 }
@@ -110,11 +121,19 @@ impl<'a> KadPacket<'a> {
         match self.opcode() {
             Some(KadOpCode::BootstrapResp) => {
                 Some(Operation::BootstrapResp(
-                    BootstrapResp::from_slice(&self.raw[1..])
+                    BootstrapResp::from_slice(&self.raw[1..]).unwrap()
                 ))
             },
             _ => todo!(),
         }
+    }
+}
+
+impl<'a> fmt::Debug for KadPacket<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("KadPacket")
+            .field("operation", &self.operation())
+            .finish()
     }
 }
 
@@ -176,6 +195,7 @@ pub enum EmuleOpCode {
 }
 
 /// Representation of an entire `KadOpCode` with the associated data
+#[derive(Debug)]
 pub enum Operation<'a> {
     BootstrapResp(BootstrapResp<'a>),
 
@@ -188,10 +208,141 @@ pub struct BootstrapResp<'a> {
 }
 
 impl<'a> BootstrapResp<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Self {
-        BootstrapResp {
-            raw
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
+        if raw.len() < (16 + 2 + 1 + 2) {
+            Err("not enough bytes in bootstrap responce")?;
         }
+
+        Ok(BootstrapResp {
+            raw
+        })
+    }
+
+    /// Kad ID of the client that sent this bootstrap responce
+    pub fn client_id(&self) -> u128 {
+        u128::from_le_bytes(self.raw[..16].try_into().unwrap())
+    }
+
+    /// configured udp port for the client that sent this responce
+    pub fn client_port(&self) -> u16 {
+        u16::from_le_bytes(self.raw[16..(16 + 2)].try_into().unwrap())
+    }
+
+    pub fn client_version(&self) -> u8 {
+        self.raw[(16 + 2)]
+    }
+
+    pub fn num_contacts(&self) -> u16 {
+        u16::from_le_bytes(self.raw[(16 + 2 + 1)..(16 + 2 + 1 + 2)].try_into().unwrap())
+    }
+
+    pub fn contacts(&self) -> Result<BootstrapRespContacts<'a>, Box<dyn Error>> {
+        BootstrapRespContacts::from_slice(self.num_contacts(), &self.raw[(16 + 2 + 1 + 2) ..])
+    }
+}
+
+impl<'a> fmt::Debug for BootstrapResp<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("BootstrapResp")
+            .field("client_id", &self.client_id())
+            .field("client_port", &self.client_port())
+            .field("client_version", &self.client_version())
+            .field("num_contacts", &self.num_contacts())
+            .field("contacts", &self.contacts())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct BootstrapRespContacts<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> BootstrapRespContacts<'a> {
+    pub fn from_slice(num: u16, raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
+        // We don't use `num` except for validation.
+        let each_size = 16 + 4 + 2 + 2 + 1; 
+        let need_size = each_size * num as usize;
+        if raw.len() != need_size {
+            Err(format!("bootstrap respo contacts has wrong size: need {}, have {}", need_size, raw.len()))?;
+        }
+
+        Ok(BootstrapRespContacts {
+            raw
+        })
+    }
+}
+
+impl<'a> fmt::Debug for BootstrapRespContacts<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_list()
+            .entries(self.clone())
+            .finish()
+    }
+}
+
+impl<'a> Iterator for BootstrapRespContacts<'a> {
+    type Item = BootstrapRespContact<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.raw.len() > 0 {
+            let (r, rem) = BootstrapRespContact::from_slice(self.raw);
+            self.raw = rem;
+            Some(r)
+        } else {
+            None
+        }
+    }
+}
+
+pub struct BootstrapRespContact<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> BootstrapRespContact<'a> {
+    pub fn from_slice(raw: &'a [u8]) -> (Self, &'a[u8]) {
+        let n = 16 + 4 + 2 + 2 + 1;
+        if raw.len() < n {
+            panic!("bad brc len: have: {}, need: {}", raw.len(), n);
+        }
+
+        let (raw, rem) = raw.split_at(n);
+
+        (BootstrapRespContact {
+            raw
+        }, rem)
+    }
+
+    pub fn client_id(&self) -> u128 {
+        u128::from_le_bytes(self.raw[..16].try_into().unwrap())
+    }
+
+    pub fn ip_addr(&self) -> u32 {
+        u32::from_le_bytes(self.raw[16..(16 + 4)].try_into().unwrap())
+    }
+
+    pub fn udp_port(&self) -> u16 {
+        u16::from_le_bytes(self.raw[(16 + 4)..(16 + 4 + 2)].try_into().unwrap())
+    }
+
+    pub fn tcp_port(&self) -> u16 {
+        u16::from_le_bytes(self.raw[(16 + 4 + 2)..(16 + 4 + 2 + 2)].try_into().unwrap())
+    }
+
+    pub fn version(&self) -> u8 {
+        self.raw[16 + 4 + 2 + 2]
+    }
+}
+
+impl<'a> fmt::Debug for BootstrapRespContact<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("BootstrapRespContact")
+            .field("client_id", &self.client_id())
+            .field("ip_addr", &self.ip_addr())
+            .field("udp_port", &self.udp_port())
+            .field("tcp_port", &self.tcp_port())
+            .field("version", &self.version())
+            .finish()
     }
 }
 

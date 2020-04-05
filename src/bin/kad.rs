@@ -11,8 +11,11 @@ use std::io::Read;
 use std::cell::RefCell;
 use futures::FutureExt;
 use fmt_extra::Hs;
+use rand::prelude::*;
 
 struct Peer {
+    // XXX: maybe just use an array of bytes here?
+    id: u128,
     last_contact: Option<std::time::Instant>,
     last_addr: net::SocketAddr,
 }
@@ -25,8 +28,10 @@ struct KadPeriodic {
 }
 
 struct Kad {
+    id: u128,
     rx_buf: RefCell<Vec<u8>>,
     socket: net::UdpSocket,
+
 
     periodic: RefCell<KadPeriodic>,
 
@@ -35,12 +40,15 @@ struct Kad {
     //
     // Right now, we'll treat independent addresses as independent peers.
     peers: RefCell<HashMap<net::SocketAddr, Peer>>,
+    // TODO: track peers in buckets by distance from our id
+    //buckets: HashMap<u8, Vec<Peer>>,
 }
 
 impl Kad {
     async fn from_addr<A: net::ToSocketAddrs>(addrs: A, bootstraps: remule::nodes::Nodes) -> Result<Kad, io::Error> {
         let socket = net::UdpSocket::bind(addrs).await?;
         Ok(Kad {
+            id: rand::rngs::OsRng.gen(),
             socket,
             rx_buf: RefCell::new(vec![0u8;1024]),
             peers: RefCell::new(HashMap::default()),
@@ -70,11 +78,16 @@ impl Kad {
             hash_map::Entry::Vacant(vacant) => {
                 println!("new peer");
                 vacant.insert(Peer {
+                    // FIXME: pull out of the responce
+                    id: 0,
                     last_contact: Some(ts),
                     last_addr: peer,
                 });
             },
         }
+
+        let packet = remule::udp_proto::Packet::from_slice(rx_data);
+        println!("packet: {:?}", packet);
 
         Ok(())
     }
