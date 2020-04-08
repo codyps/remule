@@ -15,15 +15,24 @@ use rand::prelude::*;
 
 struct Peer {
     // XXX: maybe just use an array of bytes here?
-    id: u128,
+    id: Option<u128>,
     last_contact: Option<std::time::Instant>,
     last_addr: net::SocketAddr,
 }
 
-struct KadPeriodic {
-    bootstrap_idx: usize,
-    bootstraps: remule::nodes::Nodes,
+impl From<remule::nodes::Contact> for Peer {
+    fn from(c: remule::nodes::Contact) -> Self {
+        Peer {
+            id: Some(c.id),
+            last_contact: None,
+            last_addr: net::SocketAddr::from((c.ip, c.udp_port)),
+        }
+    }
+}
 
+struct KadBootstrap {
+    bootstrap_idx: usize,
+    bootstraps: Vec<Peer>,
     timeout_bootstrap: stream::Interval,
 }
 
@@ -32,8 +41,7 @@ struct Kad {
     rx_buf: RefCell<Vec<u8>>,
     socket: net::UdpSocket,
 
-
-    periodic: RefCell<KadPeriodic>,
+    bootstrap: RefCell<KadBootstrap>,
 
     // XXX: consider if SocketAddr is the right key. We may have Peers that roam (get a different
     // IP address/port). We can identify this by using some features within the emule/kad protocol.
@@ -45,7 +53,7 @@ struct Kad {
 }
 
 impl Kad {
-    async fn from_addr<A: net::ToSocketAddrs>(addrs: A, bootstraps: remule::nodes::Nodes) -> Result<Kad, io::Error> {
+    async fn from_addr<A: net::ToSocketAddrs>(addrs: A, bootstraps: Vec<Peer>) -> Result<Kad, io::Error> {
         let socket = net::UdpSocket::bind(addrs).await?;
         Ok(Kad {
             id: rand::rngs::OsRng.gen(),
@@ -53,7 +61,7 @@ impl Kad {
             rx_buf: RefCell::new(vec![0u8;1024]),
             peers: RefCell::new(HashMap::default()),
 
-            periodic: RefCell::new(KadPeriodic {
+            bootstrap: RefCell::new(KadBootstrap {
                 bootstraps,
                 bootstrap_idx: 0,
                 timeout_bootstrap: stream::interval(Duration::from_secs(2)),
@@ -79,7 +87,7 @@ impl Kad {
                 println!("new peer");
                 vacant.insert(Peer {
                     // FIXME: pull out of the responce
-                    id: 0,
+                    id: None,
                     last_contact: Some(ts),
                     last_addr: peer,
                 });
@@ -122,26 +130,27 @@ impl Kad {
     //   - extern_port_lookup: (0, ?)
     //   - bootstrap: (None, ?)
     async fn process(&self) -> Result<(), Box<dyn Error>> {
-        let mut periodic = self.periodic.borrow_mut();
-        periodic.timeout_bootstrap.next().await;
+        let mut bootstrap = self.bootstrap.borrow_mut();
 
-
+        // XXX: ideally, we'd just not schedule ourselves when peers is below 5
         if self.peers.borrow().len() < 5 {
             // send out some bootstraps
-            if periodic.bootstrap_idx >= periodic.bootstraps.contacts.len() {
+            if bootstrap.bootstrap_idx >= bootstrap.bootstraps.len() {
                 println!("out of clients, restarting");
                 // XXX: doesn't immediately restart
-                periodic.bootstrap_idx = 0;
+                bootstrap.bootstrap_idx = 0;
             }
 
-            periodic.bootstrap_idx += 1;
-            let bsc = &periodic.bootstraps.contacts[periodic.bootstrap_idx - 1];
+            bootstrap.bootstrap_idx += 1;
+            let bsc = &bootstrap.bootstraps[bootstrap.bootstrap_idx - 1];
 
             let mut out_buf = Vec::new();
             remule::udp_proto::OperationBuf::BootstrapReq.write_to(&mut out_buf).unwrap();
             // FIXME: this await should be elsewhere, we don't want to block other timers
-            self.socket.send_to(&out_buf[..], (std::net::Ipv4Addr::from(bsc.ip), bsc.udp_port)).await?;
+            self.socket.send_to(&out_buf[..], bsc.last_addr).await?;
         }
+
+        bootstrap.timeout_bootstrap.next().await;
 
         Ok(())
         // XXX: maybe we can integrate this with the rx loop?
@@ -175,7 +184,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         remule::nodes::parse(&mut b)?
     };
 
-    let mut kad = Kad::from_addr(a, nodes).await?;
+    let bs_nodes: Vec<Peer> = nodes.contacts.into_iter().map(From::from).collect();
+    let mut kad = Kad::from_addr(a, bs_nodes).await?;
 
     // setup udp port
     // simultaniously:

@@ -8,7 +8,7 @@ use std::convert::TryInto;
 #[derive(Debug)]
 pub struct Contact {
     // bootstrap/version 0/1 fields
-    pub uid: u128,
+    pub id: u128,
     pub ip: std::net::Ipv4Addr,
     pub udp_port: u16,
     pub tcp_port: u16,
@@ -51,7 +51,7 @@ pub fn parse_bootstrap(inp: &[u8]) -> Result<Vec<Contact>, Box<dyn Error>> {
     let mut r = Vec::with_capacity(count);
 
     for _ in 0..count {
-        let uid = u128::from_le_bytes(rem[..8].try_into().unwrap());
+        let id = u128::from_le_bytes(rem[..8].try_into().unwrap());
         rem = &rem[..8];
         let ip = u32::from_le_bytes(rem[..4].try_into().unwrap());
         let ip = std::net::Ipv4Addr::from(ip);
@@ -64,7 +64,7 @@ pub fn parse_bootstrap(inp: &[u8]) -> Result<Vec<Contact>, Box<dyn Error>> {
         rem = &rem[..1];
 
         r.push(Contact {
-            uid,
+            id,
             ip,
             udp_port,
             tcp_port,
@@ -126,7 +126,7 @@ pub fn parse(inp: &[u8]) -> Result<Nodes, Box<dyn Error>> {
         }
 
         let (mut s, rs) = rem.split_at(n);
-        let uid = u128::from_le_bytes(s[..16].try_into().unwrap());
+        let id = u128::from_le_bytes(s[..16].try_into().unwrap());
         s = &s[16..];
         let ip = u32::from_le_bytes(s[..4].try_into().unwrap());
         let ip = std::net::Ipv4Addr::from(ip);
@@ -167,7 +167,7 @@ pub fn parse(inp: &[u8]) -> Result<Nodes, Box<dyn Error>> {
         rem = rs;
 
         r.push(Contact {
-            uid,
+            id,
             contact_version,
             verified,
             udp_port,
