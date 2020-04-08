@@ -13,9 +13,22 @@ use futures::FutureExt;
 use fmt_extra::Hs;
 use rand::prelude::*;
 
+#[derive(PartialEq, Eq, Hash)]
+struct KadId {
+    inner: u128
+}
+
+impl From<u128> for KadId {
+    fn from(v: u128) -> Self {
+        KadId {
+            inner: v
+        }
+    }
+}
+
 struct Peer {
     // XXX: maybe just use an array of bytes here?
-    id: Option<u128>,
+    id: Option<KadId>,
     last_contact: Option<std::time::Instant>,
     last_addr: net::SocketAddr,
 }
@@ -23,7 +36,7 @@ struct Peer {
 impl From<remule::nodes::Contact> for Peer {
     fn from(c: remule::nodes::Contact) -> Self {
         Peer {
-            id: Some(c.id),
+            id: Some(From::from(c.id)),
             last_contact: None,
             last_addr: net::SocketAddr::from((c.ip, c.udp_port)),
         }
@@ -47,7 +60,9 @@ struct Kad {
     // IP address/port). We can identify this by using some features within the emule/kad protocol.
     //
     // Right now, we'll treat independent addresses as independent peers.
-    peers: RefCell<HashMap<net::SocketAddr, Peer>>,
+    //  XXX: consider if we want to associate peers with the same KadId and different network
+    //  addresses
+    peers: RefCell<HashMap<KadId, Peer>>,
     // TODO: track peers in buckets by distance from our id
     //buckets: HashMap<u8, Vec<Peer>>,
 }
@@ -71,12 +86,14 @@ impl Kad {
 
     async fn process_rx(&self) -> Result<(), Box<dyn Error>> {
         let mut rx_buf = self.rx_buf.borrow_mut();
-        let (recv, peer) = self.socket.recv_from(&mut rx_buf[..]).await?;
+        let (recv, rx_addr) = self.socket.recv_from(&mut rx_buf[..]).await?;
         // TODO: on linux we can use SO_TIMESTAMPING and recvmsg() to get more accurate timestamps
         let ts = std::time::Instant::now();
         let rx_data = &rx_buf[..recv];
         
-        println!("peer: {:?} replied: {:?}", peer, Hs(rx_data));
+        println!("peer: {:?} replied: {:?}", rx_addr, Hs(rx_data));
+
+        /*
         // examine packet and decide if it looks like a valid emule/kad packet
         match self.peers.borrow_mut().entry(peer) {
             hash_map::Entry::Occupied(mut occupied) => {
@@ -93,6 +110,7 @@ impl Kad {
                 });
             },
         }
+        */
 
         let packet = remule::udp_proto::Packet::from_slice(rx_data);
         println!("packet: {:?}", packet);
@@ -170,21 +188,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .index(1)
             .required(true))
         .arg(Arg::with_name("nodes.dat")
-            .index(2)
-            .required(true))
+            .short("N"))
         .get_matches();
 
     let a = matches.value_of("bind-addr").unwrap();
 
-    let nodes = {
-        let nodes_path = matches.value_of("nodes.dat").unwrap();
-        let mut f_nodes = std::fs::File::open(nodes_path)?;
-        let mut b = Vec::default();
-        f_nodes.read_to_end(&mut b)?;
-        remule::nodes::parse(&mut b)?
-    };
+    let mut bs_nodes = Vec::new();
 
-    let bs_nodes: Vec<Peer> = nodes.contacts.into_iter().map(From::from).collect();
+    if let Some(nodes_path) = matches.values_of("nodes.dat") {
+        for np in nodes_path {
+            let mut f_nodes = std::fs::File::open(np)?;
+            let mut b = Vec::default();
+            f_nodes.read_to_end(&mut b)?;
+            bs_nodes.extend(remule::nodes::parse(&mut b)?.contacts.into_iter().map(From::from));
+        };
+    }
+
     let mut kad = Kad::from_addr(a, bs_nodes).await?;
 
     // setup udp port
