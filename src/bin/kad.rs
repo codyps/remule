@@ -188,7 +188,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .index(1)
             .required(true))
         .arg(Arg::with_name("nodes.dat")
-            .short("N"))
+            .short("N")
+            .takes_value(true))
         .get_matches();
 
     let a = matches.value_of("bind-addr").unwrap();
