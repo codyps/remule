@@ -12,15 +12,18 @@ use std::convert::TryInto;
 #[derive(Debug, PartialEq, Eq, Primitive)]
 #[repr(u8)]
 pub enum UdpProto {
+
     Emule = 0xC5,
     /// uncompress [2..] and then process as `KademliaHeader` (op code is uncompressed)
     KademliaPacked = 0xE5,
+    /// `KadOpCode` follows, `Operation` represents the contents
     KademliaHeader = 0xE4,
     UdpReserved1 = 0xA3,
     UdpReserved2 = 0xB2,
     Packed = 0xD4,
 }
 
+/// A complete UDP packet as recieved over the network
 pub struct Packet<'a> {
     raw: &'a [u8],
 }
