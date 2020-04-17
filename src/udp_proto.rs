@@ -127,6 +127,11 @@ impl<'a> KadPacket<'a> {
                     BootstrapResp::from_slice(&self.raw[1..]).unwrap()
                 ))
             },
+            Some(KadOpCode::Req) => {
+                Some(Operation::Req(
+                    Req::from_slice(&self.raw[1..]).unwrap()
+                ))
+            }
             _ => todo!(),
         }
     }
@@ -198,6 +203,8 @@ pub enum EmuleOpCode {
 }
 
 /// Representation of an entire `KadOpCode` with the associated data
+/// 
+/// Each UDP packet includes 1 of these.
 ///
 /// ```norust
 /// struct Operation {
@@ -209,12 +216,14 @@ pub enum EmuleOpCode {
 #[derive(Debug)]
 pub enum Operation<'a> {
     BootstrapResp(BootstrapResp<'a>),
-    SearchRes(SearchRes<'a>),
+    //BootstrapReq(BootstrapReq<'a>),
+    Req(Req<'a>),
+    Res(Res<'a>),
 
-    // placeholder
-    Res(&'a [u8]),
+    SearchRes(SearchRes<'a>),
 }
 
+/// Responce providing a number of arbitrary contacts
 pub struct BootstrapResp<'a> {
     raw: &'a [u8],
 }
@@ -272,6 +281,199 @@ impl<'a> fmt::Debug for BootstrapResp<'a> {
             .field("client_version", &self.client_version())
             .field("num_contacts", &self.num_contacts())
             .field("contacts", &self.contacts())
+            .finish()
+    }
+}
+
+/// Request nodes nearby a given node-id.
+#[derive(Clone)]
+pub struct Req<'a> {
+    raw: &'a [u8]
+}
+
+impl<'a> Req<'a> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
+        let need_size = 1 + 16 + 16;
+        if raw.len() != need_size {
+            return Err(format!("Req size mismatch: have {}, need {}", raw.len(), need_size))?;
+        }
+
+        Ok(Req {
+            raw
+        })
+    }
+
+    /// usage unclear. warning emitted if `type & 0x1f` is 0
+    pub fn type_(&self) -> u8 {
+        self.raw[1]
+    }
+
+    /// the node id being searched for
+    /// 
+    /// Reply with the nodes closest to this node
+    ///
+    /// FIXME: how is the number of returned nodes determined?
+    pub fn target(&self) -> u128 {
+        u128::from_le_bytes(self.raw[1..17].try_into().unwrap())
+    }
+
+    /// only process the request if this matches our node id
+    pub fn check(&self) -> u128 {
+        u128::from_le_bytes(self.raw[17..(17 + 16)].try_into().unwrap())
+    }
+}
+
+impl<'a> fmt::Debug for Req<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("Req")
+            .field("type", &self.type_())
+            .field("target", &self.target())
+            .field("check", &self.check())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct Res<'a> {
+    raw: &'a [u8]
+}
+
+impl<'a> Res<'a> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
+        let need_size = 16 + 1;
+        if raw.len() != need_size {
+            return Err(format!("Res size mismatch: have {}, need {}", raw.len(), need_size))?;
+        }
+
+        let v = Self {
+            raw
+        };
+
+        let mut r = raw;
+        for _ in 0..v.num_contacts() {
+            // TODO: twiddle error to make it more useful
+            let (_, rr) = ResContact::from_slice(r)?;
+            r = rr;
+        }
+
+        Ok(Self {
+            raw
+        })
+    }
+
+    pub fn target(&self) -> u128 {
+        u128::from_le_bytes(self.raw[..16].try_into().unwrap())
+    }
+
+    pub fn num_contacts(&self) -> u8 {
+        self.raw[16]
+    }
+
+    fn contact_bytes(&self) -> &'a [u8] {
+        &self.raw[(16 + 1)..]
+    }
+
+    pub fn contacts(&self) -> ResContacts<'a> {
+        ResContacts::from_slice(self.contact_bytes())
+    }
+}
+
+impl <'a> fmt::Debug for Res<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("Res")
+            .field("target", &self.target())
+            .field("num_contacts", &self.num_contacts())
+            .field("contacts", &self.contacts())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct ResContacts<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> ResContacts<'a> {
+    pub fn from_slice(raw: &'a [u8]) -> Self {
+        Self {
+            raw
+        }
+    }
+}
+
+impl<'a> fmt::Debug for ResContacts<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_list()
+            .entries(self.clone())
+            .finish()
+    }
+}
+
+impl<'a> Iterator for ResContacts<'a> {
+    type Item = ResContact<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.raw.len() == 0 {
+            return None
+        }
+
+        // NOTE: validated in `Res::from_slice()`
+        let (v, rem) = ResContact::from_slice(self.raw).unwrap();
+
+        self.raw = rem;
+        Some(v)
+    }
+}
+
+/// `Res` includes a number of these contacts
+#[derive(Clone)]
+pub struct ResContact<'a> {
+    raw: &'a [u8]
+}
+
+impl<'a> ResContact<'a> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Box<dyn Error>> {
+        let need_size = 16 + 4 + 2 + 2 + 1;
+        if raw.len() < need_size {
+            return Err(format!("Res contact size mismatch: have {}, need {}", raw.len(), need_size))?;
+        }
+
+        let (x, rem) = raw.split_at(need_size);
+
+        Ok((Self {
+            raw: x
+        }, rem))
+    }
+
+    pub fn id(&self) -> u128 {
+        u128::from_le_bytes(self.raw[..16].try_into().unwrap())
+    }
+
+    pub fn ip(&self) -> u32 {
+        u32::from_le_bytes(self.raw[16..(16 + 4)].try_into().unwrap())
+    }
+
+    pub fn udp_port(&self) -> u16 {
+        u16::from_le_bytes(self.raw[(16 + 4)..(16 + 4 + 2)].try_into().unwrap())
+    }
+
+    pub fn tcp_port(&self) -> u16 {
+        u16::from_le_bytes(self.raw[(16 + 4 + 2)..(16 + 4 + 2 + 2)].try_into().unwrap())
+    }
+
+    pub fn version(&self) -> u8 {
+        self.raw[16 + 4 + 2 + 2]
+    }
+}
+
+impl<'a> fmt::Debug for ResContact<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("ResContact")
+            .field("id", &self.id())
+            .field("ip", &self.ip())
+            .field("udp_port", &self.udp_port())
+            .field("tcp_port", &self.tcp_port())
+            .field("version", &self.version())
             .finish()
     }
 }
@@ -784,25 +986,12 @@ pub enum OperationBuf {
     },
 
     // details packet?
+    // "Contact"
     /// `KADEMLIA2_HELLO_RES`, `KADEMLIA2_HELLO_RES` uses this form
     ///
     /// in the `FindNodeIDByIP` flow, this is sent as a `KAD2_HELLO_REQ`
-    Details {
-        src_kad_id: u128,
-        src_port: u16,
-        kad_version: u8,
+    HelloRes(Details),
 
-        // "tag source port"
-        // included depedning on configuration (use_extern_kad_port)
-        src_port_internal: Option<u16>,
-
-        // "TAG misc options", packed into a u8 bitfield
-        // included if kad version new enough and one of:
-        //  - ack package requested,
-        //  - prefs indicate wirewalled
-        //  - firewall test indicates udp firewalled
-        misc_options: Option<(bool /* udp_firewalled*/, bool /* tcp_firewalled */, bool /* req ack */)>
-    },
     /// PublishReqV1 has a similar form with `1: u16` between the 2 ids
     PublishSourceReq {
         target_id: u128,
@@ -834,6 +1023,29 @@ impl OperationBuf {
             _ => todo!(),
         }
     }
+}
+
+pub struct Details {
+    pub src_kad_id: u128,
+    pub src_port: u16,
+    pub kad_version: u8,
+
+    // "tag source port"
+    // included depedning on configuration (use_extern_kad_port)
+    pub src_port_internal: Option<u16>,
+
+    // "TAG misc options", packed into a u8 bitfield
+    // included if kad version new enough and one of:
+    //  - ack package requested,
+    //  - prefs indicate wirewalled
+    //  - firewall test indicates udp firewalled
+    /// default: false
+    pub udp_firewalled: Option<bool>,
+    /// default: false
+    pub tcp_firewalled: Option<bool>,
+    /// default HELLO_RES: false
+    /// default HELLO_REQ: ignored
+    pub req_ack: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -870,7 +1082,6 @@ impl<'a> PartialEq<TagValue<'a>> for TagValueBuf {
             TagValueBuf::Uint16(a) => match other { TagValue::Uint16(b) if a == b => true, _ => false },
             TagValueBuf::Uint32(a) => match other { TagValue::Uint32(b) if a == b => true, _ => false },
             TagValueBuf::Uint64(a) => match other { TagValue::Uint64(b) if a == b => true, _ => false },
-            _ => todo!(),
         }
     }
 }
