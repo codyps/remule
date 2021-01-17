@@ -21,15 +21,25 @@ impl Kad {
         let socket = net::UdpSocket::bind(addrs).await?;
         Ok(Kad {
             socket,
-            rx_buf: vec![0u8;1024],
+            rx_buf: vec![0u8;8192],
+            peers: HashMap::new(),
         })
     }
 
     async fn process(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
             let (recv, peer) = self.socket.recv_from(&mut self.rx_buf).await?;
-            
+            let buf = &self.rx_buf[..recv];            
             // track rx timestamp?
+
+            // ClientUDPSocket.cpp::OnReceive
+            // DecryptRecievedClient
+            {
+                let op = 
+            }
+
+            // switch on `op` (first byte), either OP_EMULEPROT, OP_KADEMLIAPACKEDPROT, or OP_KADEMLIAPROT
+
 
 
         }
