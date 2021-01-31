@@ -38,7 +38,7 @@ const MAX_PUBKEYSIZE: usize = 80;
 
 // emule marks these with pragma pack(1), check if we need any explicit padding
 #[repr(C, packed)]
- struct CreditData29a {
+struct CreditData29a {
     key: [u8;16],
     uploaded_lo: u32,
     downloaded_lo: u32,

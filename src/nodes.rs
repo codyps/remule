@@ -5,7 +5,7 @@ use std::convert::TryInto;
 //  - normal (50 nodes)
 //  - bootstraping (500 - 1000 nodes)
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Contact {
     // bootstrap/version 0/1 fields
     pub id: u128,
@@ -104,6 +104,9 @@ pub fn parse(inp: &[u8]) -> Result<Nodes, Box<dyn Error>> {
 
             if bootstrap_edition == 1 {
                 // bootstrap node parsing?
+                // In practice, I haven't found any bootstrap variant nodes.dat around the
+                // internet. Generating them requires compiling emule with special options, and it
+                // seems likely no one bothers.
                 todo!();
             }
         }
