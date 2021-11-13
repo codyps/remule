@@ -1,6 +1,7 @@
 use clap::{Arg, App, SubCommand, crate_name, crate_version, crate_authors};
 use std::error::Error;
 use std::io::Read;
+use emule_proto as remule;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new(crate_name!())

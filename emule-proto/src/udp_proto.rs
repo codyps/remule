@@ -1,9 +1,91 @@
 use num_traits::FromPrimitive;
 use enum_primitive_derive::Primitive;
-use std::error::Error;
 use std::io;
 use std::fmt;
 use std::convert::TryInto;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("tag needs at least {need} bytes, have {have} (content inc)")]
+    TagSizeMismatchContent {
+        need: usize,
+        have: usize,
+    },
+
+    #[error("bootstrap respo contacts has wrong size: need {need}, have {have}")]
+    BootstrapRespContactsSizeMismatch {
+        need: usize,
+        have: usize,
+    },
+
+    #[error("tag size misatch for string type: have {have}, need {need}")]
+    TagSizeMismatchForString {
+        need: usize,
+        have: usize,
+    },
+
+    #[error("tag type invalid: {value:#x}")]
+    TagInvalid {
+        value: u8,
+    },
+
+    #[error("tag size mismatch: have {have}, need {need}, including name {name_len}")]
+    TagSizeMismatchName {
+        have: usize,
+        need: usize,
+        name_len: usize,
+    },
+
+    #[error("tag size mismatch: have {have}, need {need}")]
+    TagSizeMismatch {
+        have: usize,
+        need: usize,
+    },
+    #[error("tag list size mismatch: have {have}, need {need}")]
+    TagListTooShort {
+        have: usize,
+        need: usize,
+    },
+
+    #[error("res contact size mismatch: have {have}, need {need}")]
+    ResContactSizeMismatch {
+        have: usize,
+        need: usize,
+    },
+
+    #[error("res size mismatch: have {have}, need {need}")]
+    ResSizeMismatch {
+        have: usize,
+        need: usize,
+    },
+
+    #[error("req size mismatch: have {have}, need {need}")]
+    ReqSizeMismatch {
+        have: usize,
+        need: usize,
+    },
+
+    #[error("unhandled udp proto {udp_proto:?}")]
+    UnhandledUdpProto {
+        udp_proto: UdpProto,
+    },
+
+    #[error("need at least 1 byte in packet")]
+    PacketTooShort,
+
+    #[error("unrecognized udp proto")]
+    UnrecognizedUdpProto,
+
+    #[error("kad packet needs at least 1 byte")]
+    KadPacketTooShort,
+
+    #[error("bootstrap resp too short: have {have}, need {need}")]
+    BootstrapRespTooShort {
+        have: usize,
+        need: usize,
+    }
+}
 
 /// The first byte of a emule/kad udp packet _may_ be one of these bytes, which establishes the
 /// content of the packet.
@@ -35,9 +117,9 @@ pub struct Keys<'a> {
 }
 
 impl<'a> Packet<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Error> {
         if raw.len() < 1 {
-            Err("need at least 1 byte in packet")?;
+            Err(Error::PacketTooShort)?;
         }
 
         Ok(Packet {
@@ -49,13 +131,13 @@ impl<'a> Packet<'a> {
         UdpProto::from_u8(self.raw[0])
     }
 
-    pub fn kind(&self) -> Result<Kind<'a>, Box<dyn Error>> {
+    pub fn kind(&self) -> Result<Kind<'a>, Error> {
         match self.udp_proto() {
             Some(UdpProto::KademliaHeader) => {
                 Ok(Kind::Kad(KadPacket::from_slice(&self.raw[1..])?))
             },
-            None => { Err("unrecognized udp proto")? },
-            _ => { todo!() }
+            None => Err(Error::UnrecognizedUdpProto),
+            Some(udp_proto) => Err(Error::UnhandledUdpProto { udp_proto }) 
         }
     }
 
@@ -106,9 +188,9 @@ pub struct KadPacket<'a> {
 }
 
 impl<'a> KadPacket<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Error> {
         if raw.len() < 1 {
-            Err("kad packet needs at least 1 byte")?
+            return Err(Error::KadPacketTooShort);
         }
 
         Ok(Self {
@@ -240,9 +322,13 @@ pub struct BootstrapResp<'a> {
 /// }
 /// ```
 impl<'a> BootstrapResp<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
-        if raw.len() < (16 + 2 + 1 + 2) {
-            Err("not enough bytes in bootstrap responce")?;
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Error> {
+        let need = 16 + 2 + 1 + 2;
+        if raw.len() < need {
+            return Err(Error::BootstrapRespTooShort {
+                have: raw.len(),
+                need,
+            });
         }
 
         Ok(BootstrapResp {
@@ -268,7 +354,7 @@ impl<'a> BootstrapResp<'a> {
         u16::from_le_bytes(self.raw[(16 + 2 + 1)..(16 + 2 + 1 + 2)].try_into().unwrap())
     }
 
-    pub fn contacts(&self) -> Result<BootstrapRespContacts<'a>, Box<dyn Error>> {
+    pub fn contacts(&self) -> Result<BootstrapRespContacts<'a>, Error> {
         BootstrapRespContacts::from_slice(self.num_contacts(), &self.raw[(16 + 2 + 1 + 2) ..])
     }
 }
@@ -292,10 +378,13 @@ pub struct Req<'a> {
 }
 
 impl<'a> Req<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
-        let need_size = 1 + 16 + 16;
-        if raw.len() != need_size {
-            return Err(format!("Req size mismatch: have {}, need {}", raw.len(), need_size))?;
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Error> {
+        let need = 1 + 16 + 16;
+        if raw.len() != need {
+            return Err(Error::ReqSizeMismatch {
+                have: raw.len(),
+                need,
+            });
         }
 
         Ok(Req {
@@ -339,10 +428,13 @@ pub struct Res<'a> {
 }
 
 impl<'a> Res<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
-        let need_size = 16 + 1;
-        if raw.len() != need_size {
-            return Err(format!("Res size mismatch: have {}, need {}", raw.len(), need_size))?;
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Error> {
+        let need = 16 + 1;
+        if raw.len() != need {
+            return Err(Error::ResSizeMismatch {
+                have: raw.len(),
+                need
+            });
         }
 
         let v = Self {
@@ -432,13 +524,16 @@ pub struct ResContact<'a> {
 }
 
 impl<'a> ResContact<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Box<dyn Error>> {
-        let need_size = 16 + 4 + 2 + 2 + 1;
-        if raw.len() < need_size {
-            return Err(format!("Res contact size mismatch: have {}, need {}", raw.len(), need_size))?;
+    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Error> {
+        let need = 16 + 4 + 2 + 2 + 1;
+        if raw.len() < need {
+            return Err(Error::ResContactSizeMismatch {
+                have: raw.len(),
+                need,
+            });
         }
 
-        let (x, rem) = raw.split_at(need_size);
+        let (x, rem) = raw.split_at(need);
 
         Ok((Self {
             raw: x
@@ -495,7 +590,7 @@ pub struct SearchRes<'a> {
 }
 
 impl<'a> SearchRes<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Error> {
         Ok(SearchRes {
             raw
         })
@@ -513,7 +608,7 @@ impl<'a> SearchRes<'a> {
         u16::from_le_bytes(self.raw[(16+16)..(16+16+2)].try_into().unwrap())
     }
 
-    pub fn results(&self) -> Result<(SearchResults<'a>, &'a [u8]), Box<dyn Error>> {
+    pub fn results(&self) -> Result<(SearchResults<'a>, &'a [u8]), Error> {
         SearchResults::from_slice(self.result_ct(), &self.raw[(16+16+2)..])
     }
 }
@@ -536,7 +631,7 @@ pub struct SearchResults<'a> {
 }
 
 impl<'a> SearchResults<'a> {
-    pub fn from_slice(mut num: u16, raw: &'a [u8]) -> Result<(Self, &'a [u8]), Box<dyn Error>> {
+    pub fn from_slice(mut num: u16, raw: &'a [u8]) -> Result<(Self, &'a [u8]), Error> {
         let mut rem = raw;
         loop {
             if num == 0 {
@@ -589,7 +684,7 @@ pub struct SearchResult<'a> {
 ///    tags: TagList,
 /// }
 impl<'a> SearchResult<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Box<dyn Error>> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Error> {
         let r = &raw[16..];
         // use taglist to determine the length here
         let (_, rem) = TagList::from_slice(&r)?;
@@ -663,9 +758,12 @@ pub enum TagType {
 }
 
 impl<'a> TagList<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &[u8]), Box<dyn Error>> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &[u8]), Error> {
         if raw.len() < 4 {
-            Err(format!("tag list needs at least space for a count (4 bytes), have {} bytes", raw.len()))?;
+            return Err(Error::TagListTooShort {
+                need: 4,
+                have: raw.len(),
+            });
         }
 
         let tl = TagList {
@@ -716,7 +814,7 @@ impl<'a> TagListIter<'a> {
 }
 
 impl<'a> Iterator for TagListIter<'a> {
-    type Item = Result<Tag<'a>, Box<dyn Error>>;
+    type Item = Result<Tag<'a>, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
 
@@ -743,21 +841,30 @@ pub struct Tag<'a> {
 }
 
 impl<'a> Tag<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a[u8]), Box<dyn Error>> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a[u8]), Error> {
         let need_size = 1 + 2;
         if raw.len() < need_size {
-            Err(format!("tag needs at least {} bytes, have {}", need_size, raw.len()))?;
+            return Err(Error::TagSizeMismatch {
+                need: need_size,
+                have: raw.len(),
+            })
         }
 
         let name_len = u16::from_le_bytes(raw[1..3].try_into().unwrap()) as usize;
         let need_size = need_size + name_len;
         if raw.len() < need_size {
-            Err(format!("tag needs at least {} bytes, have {} (inc name_len {})", need_size, raw.len(), name_len))?;
+            return Err(Error::TagSizeMismatchName {
+                need: need_size,
+                have: raw.len(),
+                name_len,
+            })
         }
 
         let tag_type = match TagType::from_u8(raw[0]) {
             Some(v) => v,
-            None => Err(format!("tag type is invalid: {}", raw[0]))?,
+            None => return Err(Error::TagInvalid {
+                value: raw[0],
+            }),
         };
 
         let value_offs = 3 + name_len;
@@ -768,7 +875,10 @@ impl<'a> Tag<'a> {
             TagType::String_ => {
                 let need_size = need_size + 2;
                 if raw.len() < need_size {
-                    Err(format!("tag needs at least {} bytes, have {} (string value len)", need_size, raw.len()))?;
+                    return Err(Error::TagSizeMismatchForString {
+                        need: need_size,
+                        have: raw.len(),
+                    });
                 }
 
                 let s_len = u16::from_le_bytes(raw[value_offs..(value_offs + 6)].try_into().unwrap()) as usize;
@@ -793,16 +903,18 @@ impl<'a> Tag<'a> {
             TagType::Bsob => {
                 todo!()
             },
-            o => {
-                return Err(format!("unhandled tag type: {:?}", o))?;
+            _ => {
+                todo!()
             },
         };
 
         let need_size = need_size + content_bytes;
 
         if raw.len() < need_size {
-            Err(format!("tag needs at least {} bytes, have {} (content inc)",
-                need_size, raw.len()))?;
+            return Err(Error::TagSizeMismatchContent {
+                have: raw.len(),
+                need: need_size,
+            })
         }
 
         let (a, rem) = raw.split_at(need_size);
@@ -885,12 +997,15 @@ pub struct BootstrapRespContacts<'a> {
 }
 
 impl<'a> BootstrapRespContacts<'a> {
-    pub fn from_slice(num: u16, raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn from_slice(num: u16, raw: &'a [u8]) -> Result<Self, Error> {
         // We don't use `num` except for validation.
         let each_size = 16 + 4 + 2 + 2 + 1; 
         let need_size = each_size * num as usize;
         if raw.len() != need_size {
-            Err(format!("bootstrap respo contacts has wrong size: need {}, have {}", need_size, raw.len()))?;
+            return Err(Error::BootstrapRespContactsSizeMismatch {
+                need: need_size,
+                have: raw.len(),
+            });
         }
 
         Ok(BootstrapRespContacts {

@@ -1,0 +1,19 @@
+[package]
+name = "collect-peers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fmt-extra = "0.2.1"
+plain = "0.2.3"
+num-traits = "0.2"
+enum-primitive-derive = "0.2.1"
+md5 = "0.7"
+arc4 = "0.1"
+futures = "0.3.4"
+rand = "0.8.2"
+thiserror = "*"
+sqlx = { version = "*", features = [ "runtime-tokio-rustls" ] }
+structopt = "*"
+tokio = { version = "*", features = ["full"] }
+emule-proto = { version = "*", path = "../emule-proto" }

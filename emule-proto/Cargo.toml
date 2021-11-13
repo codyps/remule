@@ -1,0 +1,17 @@
+[package]
+name = "emule-proto"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = "2.33.3"
+fmt-extra = "0.2.1"
+async-std = { version = "1.9.0", features = ["attributes", "unstable"]}
+plain = "0.2.3"
+num-traits = "0.2"
+enum-primitive-derive = "0.2.1"
+md5 = "0.7"
+arc4 = "0.1"
+futures = "0.3.4"
+rand = "0.8.2"
+thiserror = "*"
