@@ -1,0 +1,110 @@
+"""
+@generated
+cargo-raze crate build file.
+
+DO NOT EDIT! Replaced on runs of cargo-raze
+"""
+
+# buildifier: disable=load
+load("@bazel_skylib//lib:selects.bzl", "selects")
+
+# buildifier: disable=load
+load(
+    "@rules_rust//rust:defs.bzl",
+    "rust_binary",
+    "rust_library",
+    "rust_proc_macro",
+    "rust_test",
+)
+
+package(default_visibility = [
+    # Public for visibility by "@raze__crate__version//" targets.
+    #
+    # Prefer access through "//cargo", which limits external
+    # visibility to explicit Cargo.toml dependencies.
+    "//visibility:public",
+])
+
+licenses([
+    "notice",  # MIT from expression "MIT OR Apache-2.0"
+])
+
+# Generated Targets
+
+rust_library(
+    name = "sqlx",
+    srcs = glob(["**/*.rs"]),
+    crate_features = [
+        "_rt-tokio",
+        "any",
+        "default",
+        "macros",
+        "migrate",
+        "postgres",
+        "runtime-tokio-rustls",
+        "sqlite",
+        "sqlx-macros",
+    ],
+    crate_root = "src/lib.rs",
+    data = [],
+    edition = "2018",
+    proc_macro_deps = [
+        "@raze__sqlx_macros__0_5_9//:sqlx_macros",
+    ],
+    rustc_flags = [
+        "--cap-lints=allow",
+    ],
+    tags = [
+        "cargo-raze",
+        "manual",
+    ],
+    version = "0.5.9",
+    # buildifier: leave-alone
+    deps = [
+        "@raze__sqlx_core__0_5_9//:sqlx_core",
+    ],
+)
+
+# Unsupported target "any" with type "test" omitted
+
+# Unsupported target "any-pool" with type "test" omitted
+
+# Unsupported target "migrate-macro" with type "test" omitted
+
+# Unsupported target "mssql" with type "test" omitted
+
+# Unsupported target "mssql-describe" with type "test" omitted
+
+# Unsupported target "mssql-macros" with type "test" omitted
+
+# Unsupported target "mssql-types" with type "test" omitted
+
+# Unsupported target "mysql" with type "test" omitted
+
+# Unsupported target "mysql-describe" with type "test" omitted
+
+# Unsupported target "mysql-macros" with type "test" omitted
+
+# Unsupported target "mysql-types" with type "test" omitted
+
+# Unsupported target "postgres" with type "test" omitted
+
+# Unsupported target "postgres-derives" with type "test" omitted
+
+# Unsupported target "postgres-describe" with type "test" omitted
+
+# Unsupported target "postgres-macros" with type "test" omitted
+
+# Unsupported target "postgres-types" with type "test" omitted
+
+# Unsupported target "sqlite" with type "test" omitted
+
+# Unsupported target "sqlite-derives" with type "test" omitted
+
+# Unsupported target "sqlite-describe" with type "test" omitted
+
+# Unsupported target "sqlite-macros" with type "test" omitted
+
+# Unsupported target "sqlite-types" with type "test" omitted
+
+# Unsupported target "ui-tests" with type "test" omitted
