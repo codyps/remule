@@ -8,6 +8,4 @@ edition = "2021"
 [dependencies]
 clap = "2.33.3"
 emule-proto = { version = "*", path = "../emule-proto" }
-
-[dev-dependencies]
-hex-literal = "0.3.1"
+serde_json = "*"

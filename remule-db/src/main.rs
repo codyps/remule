@@ -57,7 +57,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Ok(mut h) => {
                         let mut b = Vec::default();
                         h.read_to_end(&mut b)?;
-                        println!("{:?}", remule::nodes::parse(&mut b));
+                        let nodes = remule::nodes::parse(&mut b)?;
+
+                        println!("{}", serde_json::to_string(&nodes)?);
                     },
                     Err(e) => {
                         eprintln!("error: could not open {:?}: {:?}", f, e);
