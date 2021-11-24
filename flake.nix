@@ -6,9 +6,14 @@
       flake = false;
     };
     flake-utils.url = "github:numtide/flake-utils";
+    # included for `default.nix` support
+    flake-compat = {
+      url = "github:edolstra/flake-compat";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, crate2nix, flake-utils }:
+  outputs = { self, nixpkgs, crate2nix, flake-utils, flake-compat }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
