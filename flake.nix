@@ -25,13 +25,13 @@
           inherit pkgs;
           defaultCrateOverrides = pkgs.defaultCrateOverrides // {
             buildInputs = 
-              lib.optionals pkgs.stdenv.isDarwin
+              nixpkgs.lib.optionals pkgs.stdenv.isDarwin
                 [ pkgs.darwin.apple_sdk.frameworks.SystemConfiguration ];
           };
         };
 
       in {
-        packages.${crateName} = project.rootCrate.build;
+        packages.${crateName} = project.workspaceMembers.collect-peers.build;
 
         defaultPackage = self.packages.${system}.${crateName};
 
