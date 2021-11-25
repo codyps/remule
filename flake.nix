@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs";
+    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     crate2nix = {
       url = "github:kolloch/crate2nix";
       flake = false;
@@ -29,9 +29,18 @@
         }) {
           inherit pkgs;
           defaultCrateOverrides = pkgs.defaultCrateOverrides // {
-            buildInputs = 
-              nixpkgs.lib.optionals pkgs.stdenv.isDarwin
+            sqlx-macros = attrs: {
+              buildInputs =
+                nixpkgs.lib.optionals
+                pkgs.stdenv.isDarwin
                 [ pkgs.darwin.apple_sdk.frameworks.SystemConfiguration ];
+            };
+            collect-peers = attrs: {
+              buildInputs =
+                nixpkgs.lib.optionals
+                pkgs.stdenv.isDarwin
+                [ pkgs.darwin.apple_sdk.frameworks.SystemConfiguration ];
+            };
           };
         };
 
