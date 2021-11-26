@@ -1,7 +1,8 @@
 use core::fmt;
-use tracing::{event, Level};
+use either::Either;
 use emule_proto as remule;
 use fmt_extra::Hs;
+use futures::{Stream, StreamExt, TryStreamExt};
 use rand::prelude::*;
 use sqlx::Executor;
 use std::collections::{hash_map, HashMap};
@@ -15,11 +16,13 @@ use std::time::Duration;
 use structopt::StructOpt;
 use thiserror::Error;
 use tokio::{net, task, time};
-use either::Either;
-use futures::{Stream, StreamExt, TryStreamExt};
+use tracing::{event, Level};
 
 #[derive(Debug, Error)]
 enum Error {
+    #[error("db commit failed while creating: {source}")]
+    DbCreateCommit { source: sqlx::Error },
+
     #[error("db version unknown: {version:?}, ts = {ts:?}")]
     DbUnknownVersion {
         version: String,
@@ -38,12 +41,17 @@ enum Error {
     #[error("db insert peer failed: {source}")]
     DbInsertPeer { source: sqlx::Error },
 
+    #[error("db insert version failed: {source}")]
+    DbInsertVersion { source: sqlx::Error },
+
     #[error("db peer get failed: {source}")]
     DbFetchPeers { source: sqlx::Error },
 
     #[error("db version get failed: {source}")]
     DbVersion { source: sqlx::Error },
 }
+
+const CURRENT_STORE_VERSION: &'static str = "remule/collect/1";
 
 #[derive(Debug)]
 struct Store {
@@ -55,11 +63,11 @@ impl Store {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .connect_with(
                 sqlx::sqlite::SqliteConnectOptions::from_str(&db_uri)
-                .map_err(|source| Error::DbPoolOpen {
-                    source,
-                    uri: db_uri.to_owned(),
-                })?
-                .create_if_missing(true),
+                    .map_err(|source| Error::DbPoolOpen {
+                        source,
+                        uri: db_uri.to_owned(),
+                    })?
+                    .create_if_missing(true),
             )
             .await
             .map_err(|source| Error::DbPoolOpen {
@@ -68,35 +76,41 @@ impl Store {
             })?;
 
         let mut c = db.begin().await.unwrap();
-        let v: Option<(String, std::time::SystemTime)> = match sqlx::query_as("SELECT version, ts FROM version").fetch_one(&mut c).await {
+        let v: Option<(String, std::time::SystemTime)> =
+            match sqlx::query_as("SELECT version, ts FROM version")
+                .fetch_one(&mut c)
+                .await
+            {
                 Ok((v, ts)) => {
                     let v: String = v;
                     let ts: i64 = ts;
                     let d = std::time::Duration::from_micros(ts.try_into().unwrap());
                     let ts = std::time::UNIX_EPOCH + d;
                     Some((v, ts))
+                }
+                Err(e) => match e {
+                    sqlx::Error::Database(dbe) if dbe.message() == "no such table: version" => None,
+                    _ => return Err(Error::DbVersion { source: e }),
                 },
-                Err(e) => {
-                    match e {
-                        sqlx::Error::Database(dbe) if dbe.message() == "no such table: version" => {
-                            None
-                        },
-                        _ => return Err(Error::DbVersion { source: e }),
-                    }
-                },
-        };
+            };
 
         match v {
             Some((v, ts)) => {
-                event!(Level::INFO, "version: {}, ts: {}", v, humantime::format_rfc3339_micros(ts));
+                event!(
+                    Level::INFO,
+                    "version: {}, ts: {}",
+                    v,
+                    humantime::format_rfc3339_micros(ts)
+                );
                 if v == "1" {
                     event!(Level::INFO, "db version latest");
                 } else {
                     return Err(Error::DbUnknownVersion { version: v, ts });
                 }
-            },
+            }
             None => {
-                c.execute(r"
+                c.execute(
+                    r"
                 CREATE TABLE version (
                     version TEXT NOT NULL,
                     ts INTEGER NOT NULL
@@ -113,19 +127,42 @@ impl Store {
                     verified INTEGER, 
 
                     last_send INTEGER,
+                    sends_without_responce INTEGER,
+                    last_heard INTEGER,
 
                     PRIMARY KEY (id, ip, udp_port, tcp_port)
                 );
                 ",
                 )
-                    .await
-                    .map_err(|source| Error::DbCreateTable {
-                        source,
-                        table: "peers",
-                    })?;
-            },
+                .await
+                .map_err(|source| Error::DbCreateTable {
+                    source,
+                    table: "peers",
+                })?;
+
+                sqlx::query(
+                    "INSERT INTO version (version, ts)
+                    VALUES ($1, $2)",
+                )
+                .bind(CURRENT_STORE_VERSION)
+                .bind({
+                    let v: i64 = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis()
+                        .try_into()
+                        .unwrap();
+                    v
+                })
+                .execute(&mut c)
+                .await
+                .map_err(|source| Error::DbInsertVersion { source })?;
+            }
         }
 
+        c.commit()
+            .await
+            .map_err(|source| Error::DbCreateCommit { source })?;
 
         Ok(Self { db })
     }
@@ -150,16 +187,21 @@ impl Store {
         Ok(())
     }
 
-    pub fn peers(&self) -> impl Stream<Item = Result<Either<sqlx::sqlite::SqliteQueryResult, (String, String, u16)>, Error>> + Send + '_ {
+    pub fn peers(
+        &self,
+    ) -> impl Stream<
+        Item = Result<Either<sqlx::sqlite::SqliteQueryResult, (String, String, u16)>, Error>,
+    > + Send
+           + '_ {
         //Pin<Box<dyn futures_core::stream::Stream<Item = Result<either::Either<SqliteQueryResult, SqliteRow>, sqlx::Error>> + Send>> {
-        sqlx::query_as("
+        sqlx::query_as(
+            "
             SELECT (id, ip, udp_port) FROM peers
             ORDER_BY last_send
-        ")
-            .fetch_many(&self.db)
-            .map_err(|source| Error::DbFetchPeers {
-                source
-            })
+        ",
+        )
+        .fetch_many(&self.db)
+        .map_err(|source| Error::DbFetchPeers { source })
     }
 }
 
@@ -301,7 +343,6 @@ impl Kad {
                             .socket
                             .send_to(&out_buf[..], (ip, udp_port))
                             .await?;
-
                     }
                 }
 
@@ -488,7 +529,6 @@ enum Action {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let opts = Opt::from_args();
-
 
     let store = Store::new(&opts.db_uri).await?;
 
