@@ -102,7 +102,7 @@ impl Store {
                     v,
                     humantime::format_rfc3339_micros(ts)
                 );
-                if v == "1" {
+                if v == CURRENT_STORE_VERSION {
                     event!(Level::INFO, "db version latest");
                 } else {
                     return Err(Error::DbUnknownVersion { version: v, ts });
@@ -167,8 +167,8 @@ impl Store {
         Ok(Self { db })
     }
 
-    pub async fn insert_contact(&self, node: remule::nodes::Contact) -> Result<(), Error> {
-        sqlx::query("
+    pub async fn insert_contact(&self, node: remule::nodes::Contact) -> Result<u64, Error> {
+        let insert_res = sqlx::query("
                 INSERT INTO peers (id, ip, udp_port, tcp_port, contact_version, kad_udp_key_key, kad_udp_key_id, verified)
                 SELECT $1, $2, $3, $4, $5, $6, $7, $8
                 WHERE NOT EXISTS (SELECT 1 FROM peers WHERE id = $1 AND ip = $2 AND udp_port = $3 AND tcp_port = $4)
@@ -184,7 +184,14 @@ impl Store {
             .execute(&self.db)
             .await
             .map_err(|source| Error::DbInsertPeer { source })?;
-        Ok(())
+        event!(
+            Level::TRACE,
+            "insert_contact: {:?}: count {}, id: {}",
+            node,
+            insert_res.rows_affected(),
+            insert_res.last_insert_rowid()
+        );
+        Ok(insert_res.rows_affected())
     }
 
     pub fn peers(
@@ -324,7 +331,7 @@ impl Kad {
     }
 
     async fn bootstrap(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
-        let mut timeout_bootstrap = time::interval(Duration::from_secs(2));
+        let mut timeout_bootstrap = time::interval(Duration::from_secs(1));
 
         loop {
             let mut peers = self.shared.store.peers();
@@ -339,10 +346,10 @@ impl Kad {
                             .write_to(&mut out_buf)
                             .unwrap();
                         // FIXME: this await should be elsewhere, we don't want to block other timers
-                        self.shared
-                            .socket
-                            .send_to(&out_buf[..], (ip, udp_port))
-                            .await?;
+                        let ip: std::net::IpAddr = ip.parse().unwrap();
+                        let dest: std::net::SocketAddr = (ip, udp_port).into();
+                        event!(Level::TRACE, "sending to {}", dest);
+                        self.shared.socket.send_to(&out_buf[..], dest).await?;
                     }
                 }
 
@@ -365,9 +372,11 @@ impl Kad {
 
         let reported_port = bootstrap_resp.client_port();
         if reported_port != rx_addr.port() {
-            println!(
+            event!(
+                Level::INFO,
                 "{}: reported port {} differs from actual",
-                rx_addr, reported_port
+                rx_addr,
+                reported_port
             );
         }
 
@@ -376,14 +385,15 @@ impl Kad {
             hash_map::Entry::Occupied(mut occupied) => {
                 // TODO: update fields
                 // TODO: track sources
-                println!(
+                event!(
+                    Level::INFO,
                     "existing peer, last heard: {:?}",
                     occupied.get().last_contact
                 );
                 occupied.get_mut().last_contact = Some(ts);
             }
             hash_map::Entry::Vacant(vacant) => {
-                println!("new peer");
+                event!(Level::INFO, "new peer: {} at {}", peer_id, rx_addr);
                 // TODO: track source
                 vacant.insert(Peer {
                     id: Some(peer_id),
@@ -526,9 +536,29 @@ enum Action {
     Collect { bind_addr: SocketAddr },
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Rfc3339;
+
+impl tracing_subscriber::fmt::time::FormatTime for Rfc3339 {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> fmt::Result {
+        let time = std::time::SystemTime::now();
+        write!(w, "{}", humantime::format_rfc3339_micros(time))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let opts = Opt::from_args();
+    let env_filter = tracing_subscriber::filter::EnvFilter::try_from_env("REMULE_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::from("collect_peers=info"))
+        .add_directive("panic=error".parse().unwrap());
+
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(io::stderr)
+        .with_timer(Rfc3339)
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
 
     let store = Store::new(&opts.db_uri).await?;
 
@@ -539,9 +569,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             f_nodes.read_to_end(&mut b)?;
             let nodes = remule::nodes::parse(&mut b)?.contacts.into_iter();
 
+            let mut insert_ct = 0;
             for node in nodes {
-                store.insert_contact(node).await?;
+                insert_ct += store.insert_contact(node).await?;
             }
+
+            event!(Level::INFO, "Inserted {} nodes", insert_ct);
 
             Ok(())
         }

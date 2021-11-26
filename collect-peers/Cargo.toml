@@ -4,17 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+atty = "*"
+either = "*"
+emule-proto = { version = "*", path = "../emule-proto" }
 fmt-extra = "0.2.1"
+futures = "*"
+humantime = "*"
 rand = "0.8.2"
-thiserror = "*"
 sqlx = { version = "*", features = [ "runtime-tokio-rustls", "sqlite", "any", "postgres"] }
 structopt = "*"
+thiserror = "*"
 tokio = { version = "*", features = ["full"] }
-emule-proto = { version = "*", path = "../emule-proto" }
-humantime = "*"
-futures = "*"
-either = "*"
 tracing = "*"
+tracing-subscriber = { version = "*", features = [ "env-filter" ] }
 
 #[[bin]]
 #name = "collect_peers"
