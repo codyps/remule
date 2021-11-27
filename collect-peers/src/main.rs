@@ -3,9 +3,7 @@ use either::Either;
 use emule_proto as remule;
 use fmt_extra::Hs;
 use futures::{Stream, StreamExt, TryStreamExt};
-use rand::prelude::*;
 use sqlx::Executor;
-use std::collections::{hash_map, HashMap};
 use std::io;
 use std::io::Read;
 use std::net::SocketAddr;
@@ -294,94 +292,16 @@ impl Store {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-struct KadId {
-    inner: u128,
-}
-
-impl fmt::Display for KadId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.inner)
-    }
-}
-
-impl From<u128> for KadId {
-    fn from(v: u128) -> Self {
-        KadId { inner: v }
-    }
-}
-
-#[derive(Debug)]
-struct Peer {
-    // XXX: maybe just use an array of bytes here?
-    id: Option<KadId>,
-    last_contact: Option<std::time::Instant>,
-    last_addr: SocketAddr,
-}
-
-impl From<remule::nodes::Contact> for Peer {
-    fn from(c: remule::nodes::Contact) -> Self {
-        Peer {
-            id: Some(From::from(c.id)),
-            last_contact: None,
-            last_addr: SocketAddr::from((c.ip, c.udp_port)),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Bootstrap {
-    bootstrap_idx: usize,
-    timeout_bootstrap: time::Interval,
-}
-
-#[derive(Debug, Default)]
-struct KadMut {
-    // XXX: consider if SocketAddr is the right key. We may have Peers that roam (get a different
-    // IP address/port). We can identify this by using some features within the emule/kad protocol.
-    //
-    // Right now, we'll treat independent addresses as independent peers.
-    //  XXX: consider if we want to associate peers with the same KadId and different network
-    //  addresses
-    peers: HashMap<KadId, Peer>,
-    // TODO: track peers in buckets by distance from our id
-    //buckets: HashMap<u8, Vec<Peer>>,
-    //
-}
-
-impl KadMut {
-    fn new() -> Self {
-        Self {
-            peers: HashMap::default(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Tasks {
-    rx_join: task::JoinHandle<()>,
-    bootstrap_join: task::JoinHandle<()>,
-}
-
 #[derive(Debug)]
 struct KadShared {
-    id: u128,
     socket: net::UdpSocket,
     store: Store,
-
-    // elements we need mutability over
-    kad_mut: std::sync::Mutex<KadMut>,
 }
 
 impl KadShared {
     async fn from_addr<A: net::ToSocketAddrs>(addrs: A, store: Store) -> Result<Self, io::Error> {
         let socket = net::UdpSocket::bind(addrs).await?;
-        Ok(Self {
-            id: rand::rngs::OsRng.gen(),
-            socket,
-            kad_mut: std::sync::Mutex::new(KadMut::new()),
-            store,
-        })
+        Ok(Self { socket, store })
     }
 }
 
@@ -448,15 +368,11 @@ impl Kad {
 
     async fn handle_bootstrap_resp(
         &self,
-        ts: std::time::Instant,
+        _ts: std::time::Instant,
         s_time: std::time::SystemTime,
         rx_addr: SocketAddr,
         bootstrap_resp: remule::udp_proto::BootstrapResp<'_>,
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
-        let mut kad_mut = self.shared.kad_mut.lock().unwrap();
-
-        let peer_id = KadId::from(bootstrap_resp.client_id());
-
         let reported_port = bootstrap_resp.client_port();
         if reported_port != rx_addr.port() {
             event!(
@@ -511,10 +427,6 @@ impl Kad {
                     Ok(())
                 }
             },
-            packet_kind => {
-                event!(Level::WARN, "unhandled packet kind: {:?}", packet_kind);
-                Ok(())
-            }
         }
     }
 
@@ -523,7 +435,15 @@ impl Kad {
         let sock = &self.shared.socket;
 
         loop {
-            let (recv, rx_addr) = sock.recv_from(&mut rx_buf[..]).await?;
+            let (recv, rx_addr) = match sock.recv_from(&mut rx_buf[..]).await {
+                Ok(v) => v,
+                Err(e) => {
+                    // thread 'tokio-runtime-worker' panicked at 'called `Result::unwrap()` on an `Err` value: Os { code: 50, kind: NetworkDown, message: "Network is down" }', collect-peers/src/main.rs:408:39
+                    event!(Level::ERROR, "recv_from error: {}", e);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
             // TODO: on linux we can use SO_TIMESTAMPING and recvmsg() to get more accurate timestamps
             let ts = std::time::Instant::now();
             let s_time = SystemTime::now();
