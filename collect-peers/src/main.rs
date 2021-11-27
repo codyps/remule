@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use structopt::StructOpt;
 use thiserror::Error;
 use tokio::{net, task, time};
@@ -49,6 +49,9 @@ enum Error {
 
     #[error("db version get failed: {source}")]
     DbVersion { source: sqlx::Error },
+
+    #[error("db update last_send failed: {source}")]
+    DbUpdateSent { source: sqlx::Error },
 }
 
 const CURRENT_STORE_VERSION: &'static str = "remule/collect/1";
@@ -56,6 +59,28 @@ const CURRENT_STORE_VERSION: &'static str = "remule/collect/1";
 #[derive(Debug)]
 struct Store {
     db: sqlx::sqlite::SqlitePool,
+}
+
+/// For sqlite. i64 supported, but not u64. All our timestamps are encoded this way.
+trait UnixMillis {
+    fn as_unix_millis(&self) -> i64;
+    fn from_unix_millis(ts: i64) -> Self;
+}
+
+impl UnixMillis for std::time::SystemTime {
+    fn as_unix_millis(&self) -> i64 {
+        self.duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .try_into()
+            .unwrap()
+    }
+
+    fn from_unix_millis(ts: i64) -> Self {
+        let d = std::time::Duration::from_micros(ts.try_into().unwrap());
+        let ts = std::time::UNIX_EPOCH + d;
+        ts
+    }
 }
 
 impl Store {
@@ -83,9 +108,7 @@ impl Store {
             {
                 Ok((v, ts)) => {
                     let v: String = v;
-                    let ts: i64 = ts;
-                    let d = std::time::Duration::from_micros(ts.try_into().unwrap());
-                    let ts = std::time::UNIX_EPOCH + d;
+                    let ts = SystemTime::from_unix_millis(ts);
                     Some((v, ts))
                 }
                 Err(e) => match e {
@@ -145,15 +168,7 @@ impl Store {
                     VALUES ($1, $2)",
                 )
                 .bind(CURRENT_STORE_VERSION)
-                .bind({
-                    let v: i64 = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis()
-                        .try_into()
-                        .unwrap();
-                    v
-                })
+                .bind(SystemTime::now().as_unix_millis())
                 .execute(&mut c)
                 .await
                 .map_err(|source| Error::DbInsertVersion { source })?;
@@ -201,14 +216,81 @@ impl Store {
     > + Send
            + '_ {
         //Pin<Box<dyn futures_core::stream::Stream<Item = Result<either::Either<SqliteQueryResult, SqliteRow>, sqlx::Error>> + Send>> {
-        sqlx::query_as(
-            "
-            SELECT (id, ip, udp_port) FROM peers
-            ORDER_BY last_send
-        ",
+        sqlx::query_as("SELECT id, ip, udp_port FROM peers ORDER BY last_send ASC")
+            .fetch_many(&self.db)
+            .map_err(|source| Error::DbFetchPeers { source })
+    }
+
+    pub async fn insert_bootstrap_contact(
+        &self,
+        contact: &remule::udp_proto::BootstrapRespContact<'_>,
+        ts: std::time::SystemTime,
+    ) -> Result<u64, Error> {
+        // XXX: reconsider version tracking
+        let insert_res = sqlx::query(
+            "INSERT INTO peers (id, ip, udp_port, tcp_port, contact_version, last_heard)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (id, ip, udp_port, tcp_port) DO
+            UPDATE SET last_heard = $6, contact_version = $5",
         )
-        .fetch_many(&self.db)
-        .map_err(|source| Error::DbFetchPeers { source })
+        .bind(contact.client_id().to_string())
+        .bind(contact.ip_addr().to_string())
+        .bind(contact.udp_port())
+        .bind(contact.tcp_port())
+        .bind(contact.version())
+        .bind(ts.as_unix_millis())
+        .execute(&self.db)
+        .await
+        .map_err(|source| Error::DbInsertPeer { source })?;
+        event!(
+            Level::TRACE,
+            "insert_bootstrap_contact: {:?}: count {}, id: {}",
+            contact,
+            insert_res.rows_affected(),
+            insert_res.last_insert_rowid()
+        );
+        Ok(insert_res.rows_affected())
+    }
+
+    pub async fn insert_recv_contact(
+        &self,
+        id: u128,
+        addr: std::net::SocketAddr,
+        ts: std::time::SystemTime,
+    ) -> Result<u64, Error> {
+        let insert_res = sqlx::query(
+            "INSERT INTO peers (id, ip, udp_port, last_heard)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (id, ip, udp_port, tcp_port) DO
+            UPDATE SET last_heard = $4",
+        )
+        .bind(id.to_string())
+        .bind(addr.ip().to_string())
+        .bind(addr.port().to_string())
+        .bind(ts.as_unix_millis())
+        .execute(&self.db)
+        .await
+        .map_err(|source| Error::DbInsertPeer { source })?;
+        event!(
+            Level::TRACE,
+            "insert_bootstrap_contact: {:?}: count {}, id: {}",
+            (id, addr),
+            insert_res.rows_affected(),
+            insert_res.last_insert_rowid()
+        );
+        Ok(insert_res.rows_affected())
+    }
+
+    async fn mark_peer_sent(&self, peer: (&str, &str, u16)) -> Result<(), Error> {
+        sqlx::query("UPDATE peers SET last_send = $1 WHERE id = $2 AND ip = $3 AND udp_port = $4")
+            .bind(SystemTime::now().as_unix_millis())
+            .bind(peer.0)
+            .bind(peer.1)
+            .bind(peer.2)
+            .execute(&self.db)
+            .await
+            .map_err(|source| Error::DbUpdateSent { source })?;
+        Ok(())
     }
 }
 
@@ -340,16 +422,20 @@ impl Kad {
                 let peer = peer.unwrap();
                 match peer {
                     Either::Left(qr) => panic!("unexpected query result: {:?}", qr),
-                    Either::Right((id, ip, udp_port)) => {
+                    Either::Right((id, ip_s, udp_port)) => {
                         let mut out_buf = Vec::new();
                         remule::udp_proto::OperationBuf::BootstrapReq
                             .write_to(&mut out_buf)
                             .unwrap();
                         // FIXME: this await should be elsewhere, we don't want to block other timers
-                        let ip: std::net::IpAddr = ip.parse().unwrap();
+                        let ip: std::net::IpAddr = ip_s.parse().unwrap();
                         let dest: std::net::SocketAddr = (ip, udp_port).into();
-                        event!(Level::TRACE, "sending to {}", dest);
+                        event!(Level::INFO, "sending to {}", dest);
                         self.shared.socket.send_to(&out_buf[..], dest).await?;
+                        self.shared
+                            .store
+                            .mark_peer_sent((&id, &ip_s, udp_port))
+                            .await?;
                     }
                 }
 
@@ -360,9 +446,10 @@ impl Kad {
         }
     }
 
-    fn handle_bootstrap_resp(
+    async fn handle_bootstrap_resp(
         &self,
         ts: std::time::Instant,
+        s_time: std::time::SystemTime,
         rx_addr: SocketAddr,
         bootstrap_resp: remule::udp_proto::BootstrapResp<'_>,
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
@@ -380,82 +467,52 @@ impl Kad {
             );
         }
 
-        // track packet source
-        match kad_mut.peers.entry(peer_id) {
-            hash_map::Entry::Occupied(mut occupied) => {
-                // TODO: update fields
-                // TODO: track sources
-                event!(
-                    Level::INFO,
-                    "existing peer, last heard: {:?}",
-                    occupied.get().last_contact
-                );
-                occupied.get_mut().last_contact = Some(ts);
-            }
-            hash_map::Entry::Vacant(vacant) => {
-                event!(Level::INFO, "new peer: {} at {}", peer_id, rx_addr);
-                // TODO: track source
-                vacant.insert(Peer {
-                    id: Some(peer_id),
-                    last_contact: Some(ts),
-                    last_addr: rx_addr,
-                });
-            }
-        }
+        self.shared
+            .store
+            .insert_recv_contact(bootstrap_resp.client_id(), rx_addr, s_time)
+            .await?;
 
         // track packet reported peers
         for bs_node in bootstrap_resp.contacts()? {
-            let bs_node_id = KadId::from(bs_node.client_id());
-
-            match kad_mut.peers.entry(bs_node_id) {
-                hash_map::Entry::Occupied(mut occupied) => {
-                    // TODO: update fields
-                    // TODO: track sources
-                    println!(
-                        "{} exists, last heard: {:?}",
-                        bs_node_id,
-                        occupied.get().last_contact
-                    );
-                    occupied.get_mut().last_contact = Some(ts);
-                }
-                hash_map::Entry::Vacant(vacant) => {
-                    let peer = Peer {
-                        // FIXME: pull out of the responce
-                        id: Some(bs_node_id),
-                        last_contact: Some(ts),
-                        last_addr: (bs_node.ip_addr(), bs_node.udp_port()).into(),
-                    };
-                    println!("new peer: {:?}", peer);
-                    // TODO: track sources
-                    vacant.insert(peer);
-                }
-            }
+            self.shared
+                .store
+                .insert_bootstrap_contact(&bs_node, s_time)
+                .await
+                .unwrap();
         }
 
         Ok(())
     }
 
-    fn handle_packet(
+    async fn handle_packet(
         &self,
         ts: std::time::Instant,
+        s_time: SystemTime,
         rx_addr: SocketAddr,
         rx_data: &[u8],
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
-        println!("peer: {:?} replied: {:?}", rx_addr, Hs(rx_data));
+        event!(
+            Level::DEBUG,
+            "peer: {:?} replied: {:?}",
+            rx_addr,
+            Hs(rx_data)
+        );
 
         let packet = remule::udp_proto::Packet::from_slice(rx_data)?;
         match packet.kind()? {
             remule::udp_proto::Kind::Kad(kad_packet) => match kad_packet.operation() {
                 Some(remule::udp_proto::Operation::BootstrapResp(bootstrap_resp)) => {
-                    self.handle_bootstrap_resp(ts, rx_addr, bootstrap_resp)
+                    // XXX: consider how this async affects things.
+                    self.handle_bootstrap_resp(ts, s_time, rx_addr, bootstrap_resp)
+                        .await
                 }
                 kad_operation => {
-                    println!("unhandled kad op: {:?}", kad_operation);
+                    event!(Level::WARN, "unhandled kad op: {:?}", kad_operation);
                     Ok(())
                 }
             },
             packet_kind => {
-                println!("unhandled packet kind: {:?}", packet_kind);
+                event!(Level::WARN, "unhandled packet kind: {:?}", packet_kind);
                 Ok(())
             }
         }
@@ -469,10 +526,11 @@ impl Kad {
             let (recv, rx_addr) = sock.recv_from(&mut rx_buf[..]).await?;
             // TODO: on linux we can use SO_TIMESTAMPING and recvmsg() to get more accurate timestamps
             let ts = std::time::Instant::now();
+            let s_time = SystemTime::now();
             let rx_data = &rx_buf[..recv];
 
-            if let Err(e) = self.handle_packet(ts, rx_addr, rx_data) {
-                println!("{}: error handling packet: {}", rx_addr, e);
+            if let Err(e) = self.handle_packet(ts, s_time, rx_addr, rx_data).await {
+                event!(Level::ERROR, "{}: error handling packet: {}", rx_addr, e);
             }
         }
     }
@@ -550,7 +608,9 @@ impl tracing_subscriber::fmt::time::FormatTime for Rfc3339 {
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let opts = Opt::from_args();
     let env_filter = tracing_subscriber::filter::EnvFilter::try_from_env("REMULE_LOG")
-        .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::from("collect_peers=info"))
+        .unwrap_or_else(|_| {
+            tracing_subscriber::filter::EnvFilter::from("collect_peers=info,emule_proto=info")
+        })
         .add_directive("panic=error".parse().unwrap());
 
     tracing_subscriber::fmt()
