@@ -500,22 +500,26 @@ impl Store {
            + Send
            + '_ {
         //Pin<Box<dyn futures_core::stream::Stream<Item = Result<either::Either<SqliteQueryResult, SqliteRow>, sqlx::Error>> + Send>> {
-        sqlx::query_as("SELECT id, kad_id, ip, udp_port FROM peer ORDER BY last_send_time ASC")
-            .fetch_many(&self.db)
-            .map_err(|source| Error::DbFetchPeers { source })
-            .map_ok(|x| {
-                x.map_right(
-                    // FIXME: using String is a hack around lifetime issues
-                    |(id, kad_id, ip, udp_port): (i64, String, String, u16)| PeerStoreInfo {
-                        id: PeerStoreId { id },
-                        _kad_id: kad_id.parse().unwrap(),
-                        addr: {
-                            let ip: std::net::IpAddr = ip.parse().unwrap();
-                            (ip, udp_port).into()
-                        },
+        // XXX: LIMIT 1 is a hack to force us to re-run this query so we can avoid having the db
+        // locked for a long time, which causes the WAL to continuously grow
+        sqlx::query_as(
+            "SELECT id, kad_id, ip, udp_port FROM peer ORDER BY last_send_time ASC LIMIT 1",
+        )
+        .fetch_many(&self.db)
+        .map_err(|source| Error::DbFetchPeers { source })
+        .map_ok(|x| {
+            x.map_right(
+                // FIXME: using String is a hack around lifetime issues
+                |(id, kad_id, ip, udp_port): (i64, String, String, u16)| PeerStoreInfo {
+                    id: PeerStoreId { id },
+                    _kad_id: kad_id.parse().unwrap(),
+                    addr: {
+                        let ip: std::net::IpAddr = ip.parse().unwrap();
+                        (ip, udp_port).into()
                     },
-                )
-            })
+                },
+            )
+        })
     }
 
     async fn mark_peer_sent(&self, peer: PeerStoreId) -> Result<(), Error> {
@@ -584,7 +588,10 @@ impl Kad {
             while let Some(peer) = peers.next().await {
                 let peer = peer.unwrap();
                 match peer {
-                    Either::Left(qr) => panic!("unexpected query result: {:?}", qr),
+                    Either::Left(_qr) => {
+                        // end of the query, get us a new one
+                        continue;
+                    }
                     Either::Right(peer) => {
                         let mut out_buf = Vec::new();
                         remule::udp_proto::OperationBuf::BootstrapReq
