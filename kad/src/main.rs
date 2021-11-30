@@ -1,24 +1,23 @@
-use async_std::prelude::*;
-use async_std::task;
-use async_std::sync::Mutex;
-use core::fmt;
-use std::sync::Arc;
-use clap::{Arg, App, crate_name, crate_version, crate_authors};
-use std::io;
 use async_std::net;
+use async_std::prelude::*;
 use async_std::stream;
-use std::collections::HashMap;
-use std::collections::hash_map;
-use std::time::Duration;
-use std::io::Read;
+use async_std::sync::Mutex;
+use async_std::task;
+use clap::{crate_authors, crate_name, crate_version, App, Arg};
+use core::fmt;
+use emule_proto as remule;
 use fmt_extra::Hs;
 use rand::prelude::*;
-use emule_proto as remule;
-
+use std::collections::hash_map;
+use std::collections::HashMap;
+use std::io;
+use std::io::Read;
+use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct KadId {
-    inner: u128
+    inner: u128,
 }
 
 impl fmt::Display for KadId {
@@ -29,16 +28,14 @@ impl fmt::Display for KadId {
 
 impl From<u128> for KadId {
     fn from(v: u128) -> Self {
-        KadId {
-            inner: v
-        }
+        KadId { inner: v }
     }
 }
 
 #[derive(Debug)]
 struct Peer {
     // XXX: maybe just use an array of bytes here?
-    id: Option<KadId>,
+    _id: Option<KadId>,
     last_contact: Option<std::time::Instant>,
     last_addr: net::SocketAddr,
 }
@@ -46,7 +43,7 @@ struct Peer {
 impl From<remule::nodes::Contact> for Peer {
     fn from(c: remule::nodes::Contact) -> Self {
         Peer {
-            id: Some(From::from(c.id)),
+            _id: Some(From::from(c.id)),
             last_contact: None,
             last_addr: net::SocketAddr::from((c.ip, c.udp_port)),
         }
@@ -71,7 +68,6 @@ struct KadMut {
     // TODO: track peers in buckets by distance from our id
     //buckets: HashMap<u8, Vec<Peer>>,
     //
-
 }
 
 impl KadMut {
@@ -84,13 +80,13 @@ impl KadMut {
 
 #[derive(Debug)]
 struct Tasks {
-    rx_join: task::JoinHandle<()>,
-    bootstrap_join: task::JoinHandle<()>,
+    _rx_join: task::JoinHandle<()>,
+    _bootstrap_join: task::JoinHandle<()>,
 }
 
 #[derive(Debug)]
 struct KadShared {
-    id: u128,
+    _id: u128,
     socket: net::UdpSocket,
 
     // elements we need mutability over
@@ -100,10 +96,13 @@ struct KadShared {
 }
 
 impl KadShared {
-    async fn from_addr<A: net::ToSocketAddrs>(addrs: A, bootstraps: Vec<Peer>) -> Result<Self, io::Error> {
+    async fn from_addr<A: net::ToSocketAddrs>(
+        addrs: A,
+        bootstraps: Vec<Peer>,
+    ) -> Result<Self, io::Error> {
         let socket = net::UdpSocket::bind(addrs).await?;
         Ok(Self {
-            id: rand::rngs::OsRng.gen(),
+            _id: rand::rngs::OsRng.gen(),
             socket,
             kad_mut: std::sync::Mutex::new(KadMut::new()),
             bootstraps: Mutex::new(bootstraps),
@@ -117,7 +116,10 @@ struct Kad {
 }
 
 impl Kad {
-    async fn from_addr<A: net::ToSocketAddrs>(addrs: A, bootstraps: Vec<Peer>) -> Result<Self, io::Error> {
+    async fn from_addr<A: net::ToSocketAddrs>(
+        addrs: A,
+        bootstraps: Vec<Peer>,
+    ) -> Result<Self, io::Error> {
         let kad = Self {
             shared: Arc::new(KadShared::from_addr(addrs, bootstraps).await?),
         };
@@ -125,7 +127,7 @@ impl Kad {
         Ok(kad)
     }
 
-    async fn run(&self)  {
+    async fn run(&self) {
         // TODO: do we immediately spwan the tasks we require here? or defer them until later?
         let rx_join = {
             let kad = self.clone();
@@ -142,19 +144,22 @@ impl Kad {
                 kad.bootstrap(Bootstrap {
                     bootstrap_idx: 0,
                     timeout_bootstrap: stream::interval(Duration::from_secs(2)),
-                }).await.unwrap();
+                })
+                .await
+                .unwrap();
             })
         };
 
         futures::join!(rx_join, bootstrap_join);
     }
 
-    async fn bootstrap(&self, mut bootstrap: Bootstrap) -> Result<(), Box<dyn std::error::Error + 'static>> {
+    async fn bootstrap(
+        &self,
+        mut bootstrap: Bootstrap,
+    ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         loop {
             let bootstraps = self.shared.bootstraps.lock().await;
-            let execute_bootstrap = {
-                self.shared.kad_mut.lock().unwrap().peers.len() < 5
-            };
+            let execute_bootstrap = { self.shared.kad_mut.lock().unwrap().peers.len() < 5 };
             // XXX: ideally, we'd just not schedule ourselves when peers is below 5
             if execute_bootstrap {
                 // send out some bootstraps
@@ -168,23 +173,36 @@ impl Kad {
                 let bsc = &bootstraps[bootstrap.bootstrap_idx - 1];
 
                 let mut out_buf = Vec::new();
-                remule::udp_proto::OperationBuf::BootstrapReq.write_to(&mut out_buf).unwrap();
+                remule::udp_proto::OperationBuf::BootstrapReq
+                    .write_to(&mut out_buf)
+                    .unwrap();
                 // FIXME: this await should be elsewhere, we don't want to block other timers
-                self.shared.socket.send_to(&out_buf[..], bsc.last_addr).await?;
+                self.shared
+                    .socket
+                    .send_to(&out_buf[..], bsc.last_addr)
+                    .await?;
             }
 
             bootstrap.timeout_bootstrap.next().await;
         }
     }
 
-    fn handle_bootstrap_resp(&self, ts: std::time::Instant, rx_addr: net::SocketAddr, bootstrap_resp: remule::udp_proto::BootstrapResp<'_>) -> Result<(), Box<dyn std::error::Error + 'static>> {
+    fn handle_bootstrap_resp(
+        &self,
+        ts: std::time::Instant,
+        rx_addr: net::SocketAddr,
+        bootstrap_resp: remule::udp_proto::BootstrapResp<'_>,
+    ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let mut kad_mut = self.shared.kad_mut.lock().unwrap();
 
         let peer_id = KadId::from(bootstrap_resp.client_id());
 
         let reported_port = bootstrap_resp.client_port();
         if reported_port != rx_addr.port() {
-            println!("{}: reported port {} differs from actual", rx_addr, reported_port);
+            println!(
+                "{}: reported port {} differs from actual",
+                rx_addr, reported_port
+            );
         }
 
         // track packet source
@@ -192,18 +210,21 @@ impl Kad {
             hash_map::Entry::Occupied(mut occupied) => {
                 // TODO: update fields
                 // TODO: track sources
-                println!("existing peer, last heard: {:?}", occupied.get().last_contact);
+                println!(
+                    "existing peer, last heard: {:?}",
+                    occupied.get().last_contact
+                );
                 occupied.get_mut().last_contact = Some(ts);
-            },
+            }
             hash_map::Entry::Vacant(vacant) => {
                 println!("new peer");
                 // TODO: track source
                 vacant.insert(Peer {
-                    id: Some(peer_id),
+                    _id: Some(peer_id),
                     last_contact: Some(ts),
                     last_addr: rx_addr,
                 });
-            },
+            }
         }
 
         // track packet reported peers
@@ -214,51 +235,54 @@ impl Kad {
                 hash_map::Entry::Occupied(mut occupied) => {
                     // TODO: update fields
                     // TODO: track sources
-                    println!("{} exists, last heard: {:?}", bs_node_id, occupied.get().last_contact);
+                    println!(
+                        "{} exists, last heard: {:?}",
+                        bs_node_id,
+                        occupied.get().last_contact
+                    );
                     occupied.get_mut().last_contact = Some(ts);
-                },
+                }
                 hash_map::Entry::Vacant(vacant) => {
                     let peer = Peer {
                         // FIXME: pull out of the responce
-                        id: Some(bs_node_id),
+                        _id: Some(bs_node_id),
                         last_contact: Some(ts),
                         last_addr: (bs_node.ip_addr(), bs_node.udp_port()).into(),
                     };
                     println!("new peer: {:?}", peer);
                     // TODO: track sources
                     vacant.insert(peer);
-                },
+                }
             }
         }
 
         Ok(())
     }
 
-    fn handle_packet(&self, ts: std::time::Instant, rx_addr: net::SocketAddr, rx_data: &[u8]) -> Result<(), Box<dyn std::error::Error + 'static>> {
+    fn handle_packet(
+        &self,
+        ts: std::time::Instant,
+        rx_addr: net::SocketAddr,
+        rx_data: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         println!("peer: {:?} replied: {:?}", rx_addr, Hs(rx_data));
 
         let packet = remule::udp_proto::Packet::from_slice(rx_data)?;
         match packet.kind()? {
-            remule::udp_proto::Kind::Kad(kad_packet) => {
-                match kad_packet.operation() {
-                    Some(remule::udp_proto::Operation::BootstrapResp(bootstrap_resp)) => {
-                        self.handle_bootstrap_resp(ts, rx_addr, bootstrap_resp)
-                    },
-                    kad_operation => {
-                        println!("unhandled kad op: {:?}", kad_operation);
-                        Ok(())
-                    }
+            remule::udp_proto::Kind::Kad(kad_packet) => match kad_packet.operation() {
+                Some(remule::udp_proto::Operation::BootstrapResp(bootstrap_resp)) => {
+                    self.handle_bootstrap_resp(ts, rx_addr, bootstrap_resp)
+                }
+                kad_operation => {
+                    println!("unhandled kad op: {:?}", kad_operation);
+                    Ok(())
                 }
             },
-            packet_kind => {
-                println!("unhandled packet kind: {:?}", packet_kind);
-                Ok(())
-            }
         }
     }
 
     async fn process_rx(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
-        let mut rx_buf = [0u8;1024];
+        let mut rx_buf = [0u8; 1024];
         let sock = &self.shared.socket;
 
         loop {
@@ -266,7 +290,7 @@ impl Kad {
             // TODO: on linux we can use SO_TIMESTAMPING and recvmsg() to get more accurate timestamps
             let ts = std::time::Instant::now();
             let rx_data = &rx_buf[..recv];
-            
+
             if let Err(e) = self.handle_packet(ts, rx_addr, rx_data) {
                 println!("{}: error handling packet: {}", rx_addr, e);
             }
@@ -284,7 +308,7 @@ impl Kad {
     //  - determine our external port from a contact ever 15 seconds
     //    - (by sending a Null packet to a random contact)
     //  - some "big timer" that runs every 10 seconds & every 1 hour per "zone"
-    //  - small timer every 1 minute per "zone" 
+    //  - small timer every 1 minute per "zone"
     //  - search jumpstart every X seconds
     //  - zone consolidate every 45 minutes
     //  - if unconnected, every 2 or 15 seconds bootstrap from one bootstrap contact.
@@ -292,7 +316,7 @@ impl Kad {
     //
     //
     //  Timers: (initial, reset)
-    //   - next_search_jump_start: (0, ?): 
+    //   - next_search_jump_start: (0, ?):
     //   - next_self_lookup: (3min, ?)
     //   - status_update: (0, ?)
     //   - big_timer: (0, ?)
@@ -308,7 +332,7 @@ impl Kad {
         Ok(())
         // XXX: maybe we can integrate this with the rx loop?
         // Decide when we need to send out information based
-        
+
         // examine our peers. if we haven't heard from them recently, poke them.
         // otherwise, generate a timeout from the least recently heard one and repeat
     }
@@ -320,12 +344,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let matches = App::new(crate_name!())
         .author(crate_authors!())
         .version(crate_version!())
-        .arg(Arg::with_name("bind-addr")
-            .index(1)
-            .required(true))
-        .arg(Arg::with_name("nodes.dat")
-            .short("N")
-            .takes_value(true))
+        .arg(Arg::with_name("bind-addr").index(1).required(true))
+        .arg(Arg::with_name("nodes.dat").short("N").takes_value(true))
         .get_matches();
 
     let a = matches.value_of("bind-addr").unwrap();
@@ -337,8 +357,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             let mut f_nodes = std::fs::File::open(np)?;
             let mut b = Vec::default();
             f_nodes.read_to_end(&mut b)?;
-            bs_nodes.extend(remule::nodes::parse(&mut b)?.contacts.into_iter().map(From::from));
-        };
+            bs_nodes.extend(
+                remule::nodes::parse(&mut b)?
+                    .contacts
+                    .into_iter()
+                    .map(From::from),
+            );
+        }
     }
 
     let kad = Kad::from_addr(a, bs_nodes).await?;

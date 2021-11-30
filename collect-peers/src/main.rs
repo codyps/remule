@@ -3,10 +3,11 @@ use either::Either;
 use emule_proto as remule;
 use fmt_extra::Hs;
 use futures::{Stream, StreamExt, TryStreamExt};
+use remule::udp_proto::BootstrapRespContact;
 use sqlx::Executor;
 use std::io;
 use std::io::Read;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -18,6 +19,13 @@ use tracing::{event, Level};
 
 #[derive(Debug, Error)]
 enum Error {
+    #[error("db upgrade from {old_version} to {new_version} failed: {source}")]
+    DbUpgrade {
+        new_version: &'static str,
+        old_version: String,
+        source: sqlx::Error,
+    },
+
     #[error("db commit failed while creating: {source}")]
     DbCreateCommit { source: sqlx::Error },
 
@@ -52,7 +60,109 @@ enum Error {
     DbUpdateSent { source: sqlx::Error },
 }
 
-const CURRENT_STORE_VERSION: &'static str = "remule/collect/1";
+const STORE_V1: &str = "remule/collect/1";
+const STORE_V2: &str = "remule/collect/2";
+const STORE_V3: &str = "remule/collect/3";
+
+const CURRENT_STORE_VERSION: &str = STORE_V3;
+
+#[derive(Debug, Clone, Copy)]
+struct Peer {
+    id: u128,
+    ip: IpAddr,
+    udp_port: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PeerStoreId {
+    id: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReportStoreId {
+    id: i64,
+}
+
+/// Something out there that _may_ be connectable
+#[derive(Debug, Clone, Copy)]
+struct Contact {
+    peer: Peer,
+
+    /// tcp port is not known in all cases. For example:
+    ///  - when we recv a udp frame, (BootstrapResp) it doesn't tell us the tcp port of the host
+    ///    that sent the udp frame
+    tcp_port: Option<u16>,
+
+    /// present only in BootstrapRespContact and nodes.dat file
+    version: Option<u8>,
+
+    // the below fields basically only show up right now from importing nodes.dat files
+    kad_udp_key_ip: Option<u32>,
+    kad_udp_key_key: Option<u32>,
+    // FIXME: figure out what verified means in detail
+    verified: Option<u8>,
+}
+
+#[derive(Debug)]
+enum ContactSource {
+    // UDP packet header for recv'd packets with some of the packet content (deferring to udp
+    // header). Similar to `ReportedByRemote`.
+    //UdpSource,
+    /// UDP packet header for recv'd packets combined with the packet content (deferring to the
+    /// packet content). Similar to `UdpSource`.
+    ReportedByRemote,
+    /// Provided by some peer in a bootstrap response
+    ReportedByBootstrap,
+    // From some nodes.dat file
+    //NodesDat,
+}
+
+impl From<remule::nodes::Contact> for Peer {
+    fn from(v: remule::nodes::Contact) -> Self {
+        Self {
+            id: v.id,
+            ip: v.ip.into(),
+            udp_port: v.udp_port,
+        }
+    }
+}
+
+impl From<remule::nodes::Contact> for Contact {
+    fn from(v: remule::nodes::Contact) -> Self {
+        Self {
+            peer: Peer {
+                id: v.id,
+                ip: v.ip.into(),
+                udp_port: v.udp_port,
+            },
+            tcp_port: Some(v.tcp_port),
+            version: v.contact_version,
+            kad_udp_key_key: v.kad_udp_key.map(|x| x.0),
+            kad_udp_key_ip: v.kad_udp_key.map(|x| x.1),
+            verified: v.verified,
+        }
+    }
+}
+
+impl<'a> From<BootstrapRespContact<'a>> for Contact {
+    fn from(v: BootstrapRespContact) -> Self {
+        Self {
+            peer: Peer {
+                id: v.client_id(),
+                ip: v.ip_addr().into(),
+
+                udp_port: v.udp_port(),
+            },
+            tcp_port: Some(v.tcp_port()),
+
+            version: Some(v.version()),
+
+            kad_udp_key_ip: None,
+            kad_udp_key_key: None,
+            verified: None,
+        }
+    }
+}
 
 #[derive(Debug)]
 struct Store {
@@ -99,8 +209,9 @@ impl Store {
             })?;
 
         let mut c = db.begin().await.unwrap();
+
         let v: Option<(String, std::time::SystemTime)> =
-            match sqlx::query_as("SELECT version, ts FROM version")
+            match sqlx::query_as("SELECT version, ts FROM version ORDER BY ts DESC LIMIT 1")
                 .fetch_one(&mut c)
                 .await
             {
@@ -116,44 +227,158 @@ impl Store {
             };
 
         match v {
-            Some((v, ts)) => {
+            Some((mut v, ts)) => {
                 event!(
                     Level::INFO,
                     "version: {}, ts: {}",
                     v,
                     humantime::format_rfc3339_micros(ts)
                 );
-                if v == CURRENT_STORE_VERSION {
-                    event!(Level::INFO, "db version latest");
-                } else {
-                    return Err(Error::DbUnknownVersion { version: v, ts });
+                let mut executed_update = false;
+                'version_update: loop {
+                    match v.as_str() {
+                        CURRENT_STORE_VERSION => {
+                            event!(Level::INFO, "db version latest");
+                            if executed_update {
+                                sqlx::query(
+                                    "INSERT INTO version (version, ts)
+                                   VALUES ($1, $2)",
+                                )
+                                .bind(CURRENT_STORE_VERSION)
+                                .bind(SystemTime::now().as_unix_millis())
+                                .execute(&mut c)
+                                .await
+                                .map_err(|source| Error::DbInsertVersion { source })?;
+                            }
+                            break 'version_update;
+                        }
+                        STORE_V1 => {
+                            let new_version = STORE_V2;
+                            executed_update = true;
+                            c.execute(
+                                "
+                                ALTER TABLE peers
+                                ADD COLUMN last_recv INTEGER;
+
+                                ALTER TABLE peers
+                                RENAME COLUMN last_heard TO last_report;",
+                            )
+                            .await
+                            .map_err(|source| Error::DbUpgrade {
+                                new_version,
+                                old_version: v.clone(),
+                                source,
+                            })?;
+
+                            v = new_version.to_owned();
+                        }
+                        STORE_V2 => {
+                            let new_version = STORE_V3;
+                            executed_update = true;
+                            c.execute(
+                                "
+                                CREATE TABLE peer (
+                                    id INTEGER PRIMARY KEY,
+
+                                    kad_id TEXT NOT NULL,
+                                    ip TEXT NOT NULL,
+                                    udp_port INTEGER NOT NULL,
+
+                                    last_send_time INTEGER,
+
+                                    CONSTRAINT peer_unique UNIQUE (kad_id, ip, udp_port)
+                                );
+
+                                CREATE TABLE report (
+                                    id INTEGER PRIMARY KEY,
+                                    source_peer INTEGER NOT NULL,
+
+                                    recv_time INTEGER NOT NULL,
+
+                                    FOREIGN KEY(source_peer) REFERENCES peer(id)
+                                );
+
+                                CREATE TABLE report_contact (
+                                    id INTEGER PRIMARY KEY,
+
+                                    report_id INTEGER NOT NULL,
+
+                                    reported_peer_id INTEGER NOT NULL,
+
+                                    tcp_port INTEGER,
+
+                                    contact_version INTEGER,
+                                    verified INTEGER, 
+
+                                    FOREIGN KEY(report_id) REFERENCES report(id),
+                                    FOREIGN KEY(reported_peer_id) REFERENCES peer(id)
+                                );
+
+                                INSERT INTO peer (kad_id, ip, udp_port, last_send_time) 
+                                    SELECT id, ip, udp_port, MAX(last_send) FROM peers GROUP BY id, ip, udp_port;
+                                DROP TABLE peers;
+                                ",
+                            )
+                            .await
+                            .map_err(|source| Error::DbUpgrade {
+                                new_version,
+                                old_version: v.clone(),
+                                source,
+                            })?;
+
+                            v = new_version.to_owned();
+                        }
+                        _ => {
+                            return Err(Error::DbUnknownVersion { version: v, ts });
+                        }
+                    }
                 }
             }
             None => {
                 c.execute(
                     r"
-                CREATE TABLE version (
-                    version TEXT NOT NULL,
-                    ts INTEGER NOT NULL
-                );
-                CREATE TABLE peers (
-                    id TEXT NOT NULL,
-                    ip TEXT NOT NULL,
-                    udp_port INTEGER,
-                    tcp_port INT,
+                    CREATE TABLE version (
+                        version TEXT NOT NULL,
+                        ts INTEGER NOT NULL
+                    );
 
-                    contact_version INTEGER,
-                    kad_udp_key_key INTEGER,
-                    kad_udp_key_id INTEGER,
-                    verified INTEGER, 
+                    CREATE TABLE peer (
+                        id INTEGER PRIMARY KEY,
 
-                    last_send INTEGER,
-                    sends_without_responce INTEGER,
-                    last_heard INTEGER,
+                        kad_id TEXT NOT NULL,
+                        ip TEXT NOT NULL,
+                        udp_port INTEGER NOT NULL,
 
-                    PRIMARY KEY (id, ip, udp_port, tcp_port)
-                );
-                ",
+                        last_send_time INTEGER,
+
+                        CONSTRAINT peer_unqiue UNIQUE (kad_id, ip, udp_port)
+                    );
+
+                    CREATE TABLE report (
+                        id INTEGER PRIMARY KEY,
+                        source_peer INTEGER NOT NULL,
+
+                        recv_time INTEGER NOT NULL,
+
+                        FOREIGN KEY(source_peer) REFERENCES peer(id)
+                    );
+
+                    CREATE TABLE report_contact (
+                        id INTEGER PRIMARY KEY,
+
+                        report_id INTEGER NOT NULL,
+
+                        reported_peer_id INTEGER NOT NULL,
+
+                        tcp_port INTEGER,
+
+                        contact_version INTEGER,
+                        verified INTEGER, 
+
+                        FOREIGN KEY(report_id) REFERENCES report(id),
+                        FOREIGN KEY(reported_peer_id) REFERENCES peer(id)
+                    );
+                    ",
                 )
                 .await
                 .map_err(|source| Error::DbCreateTable {
@@ -163,7 +388,7 @@ impl Store {
 
                 sqlx::query(
                     "INSERT INTO version (version, ts)
-                    VALUES ($1, $2)",
+                        VALUES ($1, $2)",
                 )
                 .bind(CURRENT_STORE_VERSION)
                 .bind(SystemTime::now().as_unix_millis())
@@ -180,116 +405,134 @@ impl Store {
         Ok(Self { db })
     }
 
-    pub async fn insert_contact(&self, node: remule::nodes::Contact) -> Result<u64, Error> {
-        let insert_res = sqlx::query("
-                INSERT INTO peers (id, ip, udp_port, tcp_port, contact_version, kad_udp_key_key, kad_udp_key_id, verified)
-                SELECT $1, $2, $3, $4, $5, $6, $7, $8
-                WHERE NOT EXISTS (SELECT 1 FROM peers WHERE id = $1 AND ip = $2 AND udp_port = $3 AND tcp_port = $4)
-                ")
-            .bind(node.id.to_string())
-            .bind(node.ip.to_string())
-            .bind(node.udp_port)
-            .bind(node.tcp_port)
-            .bind(node.contact_version)
-            .bind(node.kad_udp_key.map(|x| x.0))
-            .bind(node.kad_udp_key.map(|x| x.1))
-            .bind(node.verified)
-            .execute(&self.db)
-            .await
-            .map_err(|source| Error::DbInsertPeer { source })?;
-        event!(
-            Level::TRACE,
-            "insert_contact: {:?}: count {}, id: {}",
-            node,
-            insert_res.rows_affected(),
-            insert_res.last_insert_rowid()
-        );
-        Ok(insert_res.rows_affected())
+    pub async fn insert_peer(&self, peer: &Peer) -> Result<(u64, PeerStoreId), Error> {
+        let kad_id = peer.id.to_string();
+        let peer_ip = peer.ip.to_string();
+
+        let res =
+            sqlx::query("INSERT OR IGNORE INTO peer (kad_id, ip, udp_port) VALUES ($1, $2, $3)")
+                .bind(peer.id.to_string())
+                .bind(peer.ip.to_string())
+                .bind(peer.udp_port)
+                .execute(&self.db)
+                .await
+                .map_err(|source| Error::DbInsertPeer { source })?;
+
+        let ct = res.rows_affected();
+
+        let s =
+            sqlx::query_as("SELECT id FROM peer WHERE kad_id = $1 AND ip = $2 AND udp_port = $3")
+                .bind(kad_id)
+                .bind(peer_ip)
+                .bind(peer.udp_port)
+                .fetch_one(&self.db)
+                .await
+                .map_err(|source| Error::DbInsertPeer { source })?;
+
+        let row: (i64,) = s;
+        let id = PeerStoreId { id: row.0 };
+
+        if ct != 0 {
+            event!(Level::INFO, "unique peer: {:?}: {:?}", peer, id);
+        } else {
+            event!(Level::TRACE, "insert_peer: {:?}: {:?}", peer, id);
+        };
+        Ok((ct, id))
     }
 
-    pub fn peers(
+    pub async fn insert_report(
         &self,
-    ) -> impl Stream<
-        Item = Result<Either<sqlx::sqlite::SqliteQueryResult, (String, String, u16)>, Error>,
-    > + Send
-           + '_ {
-        //Pin<Box<dyn futures_core::stream::Stream<Item = Result<either::Either<SqliteQueryResult, SqliteRow>, sqlx::Error>> + Send>> {
-        sqlx::query_as("SELECT id, ip, udp_port FROM peers ORDER BY last_send ASC")
-            .fetch_many(&self.db)
-            .map_err(|source| Error::DbFetchPeers { source })
-    }
-
-    pub async fn insert_bootstrap_contact(
-        &self,
-        contact: &remule::udp_proto::BootstrapRespContact<'_>,
-        ts: std::time::SystemTime,
-    ) -> Result<u64, Error> {
-        // XXX: reconsider version tracking
-        let insert_res = sqlx::query(
-            "INSERT INTO peers (id, ip, udp_port, tcp_port, contact_version, last_heard)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (id, ip, udp_port, tcp_port) DO
-            UPDATE SET last_heard = $6, contact_version = $5",
+        source: PeerStoreId,
+        recv_time: SystemTime,
+    ) -> Result<ReportStoreId, Error> {
+        let s: (i64,) = sqlx::query_as(
+            "INSERT INTO report (source_peer, recv_time) VALUES ($1, $2) RETURNING id",
         )
-        .bind(contact.client_id().to_string())
-        .bind(contact.ip_addr().to_string())
-        .bind(contact.udp_port())
-        .bind(contact.tcp_port())
-        .bind(contact.version())
-        .bind(ts.as_unix_millis())
+        .bind(source.id)
+        .bind(recv_time.as_unix_millis())
+        .fetch_one(&self.db)
+        .await
+        .map_err(|source| Error::DbInsertPeer { source })?;
+
+        let id = ReportStoreId { id: s.0 };
+        event!(Level::TRACE, "insert_report: {:?}: {:?}", source, id);
+        Ok(id)
+    }
+
+    pub async fn insert_report_contact(
+        &self,
+        report: ReportStoreId,
+        contact: &Contact,
+        _source: ContactSource,
+    ) -> Result<u64, Error> {
+        // basic process:
+        //  1. find peer for this Contact (insert if not exist)
+        //  2. insert report contact
+
+        let (ct, peer) = self.insert_peer(&contact.peer).await?;
+
+        let insert_res = sqlx::query(
+            "INSERT INTO report_contact (report_id, reported_peer_id, tcp_port, contact_version, verified)
+            SELECT $1, $2, $3, $4, $5
+            ",
+        )
+        .bind(report.id)
+        .bind(peer.id)
+        .bind(contact.tcp_port)
+        .bind(contact.version)
+        .bind(contact.verified)
         .execute(&self.db)
         .await
         .map_err(|source| Error::DbInsertPeer { source })?;
         event!(
             Level::TRACE,
-            "insert_bootstrap_contact: {:?}: count {}, id: {}",
+            "insert_report_contact: {:?}: count {}, id: {}",
             contact,
             insert_res.rows_affected(),
             insert_res.last_insert_rowid()
         );
-        Ok(insert_res.rows_affected())
+        Ok(ct)
     }
 
-    pub async fn insert_recv_contact(
+    pub fn peers(
         &self,
-        id: u128,
-        addr: std::net::SocketAddr,
-        ts: std::time::SystemTime,
-    ) -> Result<u64, Error> {
-        let insert_res = sqlx::query(
-            "INSERT INTO peers (id, ip, udp_port, last_heard)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (id, ip, udp_port, tcp_port) DO
-            UPDATE SET last_heard = $4",
-        )
-        .bind(id.to_string())
-        .bind(addr.ip().to_string())
-        .bind(addr.port().to_string())
-        .bind(ts.as_unix_millis())
-        .execute(&self.db)
-        .await
-        .map_err(|source| Error::DbInsertPeer { source })?;
-        event!(
-            Level::TRACE,
-            "insert_bootstrap_contact: {:?}: count {}, id: {}",
-            (id, addr),
-            insert_res.rows_affected(),
-            insert_res.last_insert_rowid()
-        );
-        Ok(insert_res.rows_affected())
+    ) -> impl Stream<Item = Result<Either<sqlx::sqlite::SqliteQueryResult, PeerStoreInfo>, Error>>
+           + Send
+           + '_ {
+        //Pin<Box<dyn futures_core::stream::Stream<Item = Result<either::Either<SqliteQueryResult, SqliteRow>, sqlx::Error>> + Send>> {
+        sqlx::query_as("SELECT id, kad_id, ip, udp_port FROM peer ORDER BY last_send_time ASC")
+            .fetch_many(&self.db)
+            .map_err(|source| Error::DbFetchPeers { source })
+            .map_ok(|x| {
+                x.map_right(
+                    // FIXME: using String is a hack around lifetime issues
+                    |(id, kad_id, ip, udp_port): (i64, String, String, u16)| PeerStoreInfo {
+                        id: PeerStoreId { id },
+                        _kad_id: kad_id.parse().unwrap(),
+                        addr: {
+                            let ip: std::net::IpAddr = ip.parse().unwrap();
+                            (ip, udp_port).into()
+                        },
+                    },
+                )
+            })
     }
 
-    async fn mark_peer_sent(&self, peer: (&str, &str, u16)) -> Result<(), Error> {
-        sqlx::query("UPDATE peers SET last_send = $1 WHERE id = $2 AND ip = $3 AND udp_port = $4")
+    async fn mark_peer_sent(&self, peer: PeerStoreId) -> Result<(), Error> {
+        sqlx::query("UPDATE peer SET last_send_time = $1 WHERE id = $2")
             .bind(SystemTime::now().as_unix_millis())
-            .bind(peer.0)
-            .bind(peer.1)
-            .bind(peer.2)
+            .bind(peer.id)
             .execute(&self.db)
             .await
             .map_err(|source| Error::DbUpdateSent { source })?;
         Ok(())
     }
+}
+
+struct PeerStoreInfo {
+    id: PeerStoreId,
+    _kad_id: u128,
+    addr: SocketAddr,
 }
 
 #[derive(Debug)]
@@ -342,20 +585,22 @@ impl Kad {
                 let peer = peer.unwrap();
                 match peer {
                     Either::Left(qr) => panic!("unexpected query result: {:?}", qr),
-                    Either::Right((id, ip_s, udp_port)) => {
+                    Either::Right(peer) => {
                         let mut out_buf = Vec::new();
                         remule::udp_proto::OperationBuf::BootstrapReq
                             .write_to(&mut out_buf)
                             .unwrap();
                         // FIXME: this await should be elsewhere, we don't want to block other timers
-                        let ip: std::net::IpAddr = ip_s.parse().unwrap();
-                        let dest: std::net::SocketAddr = (ip, udp_port).into();
-                        event!(Level::INFO, "sending to {}", dest);
-                        self.shared.socket.send_to(&out_buf[..], dest).await?;
-                        self.shared
-                            .store
-                            .mark_peer_sent((&id, &ip_s, udp_port))
-                            .await?;
+                        event!(Level::INFO, "sending to {}", peer.addr);
+                        match self.shared.socket.send_to(&out_buf[..], peer.addr).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                event!(Level::ERROR, "send_to failed: {}", e);
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                continue;
+                            }
+                        }
+                        self.shared.store.mark_peer_sent(peer.id).await?;
                     }
                 }
 
@@ -369,33 +614,80 @@ impl Kad {
     async fn handle_bootstrap_resp(
         &self,
         _ts: std::time::Instant,
-        s_time: std::time::SystemTime,
+        recv_time: std::time::SystemTime,
         rx_addr: SocketAddr,
         bootstrap_resp: remule::udp_proto::BootstrapResp<'_>,
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let reported_port = bootstrap_resp.client_port();
         if reported_port != rx_addr.port() {
             event!(
-                Level::INFO,
+                Level::DEBUG,
                 "{}: reported port {} differs from actual",
                 rx_addr,
                 reported_port
             );
         }
 
-        self.shared
+        let peer = Peer {
+            id: bootstrap_resp.client_id(),
+            ip: rx_addr.ip(),
+            udp_port: rx_addr.port(),
+        };
+
+        let (packet_from_unknown_peer, peer_sid) = self.shared.store.insert_peer(&peer).await?;
+        let report = self.shared.store.insert_report(peer_sid, recv_time).await?;
+
+        if packet_from_unknown_peer != 0 {
+            event!(Level::INFO, "bootstrap resp from unknown peer: {:?}", peer);
+        }
+
+        let self_contact = Contact {
+            peer: Peer {
+                id: bootstrap_resp.client_id(),
+                ip: rx_addr.ip(),
+                udp_port: bootstrap_resp.client_port(),
+            },
+
+            tcp_port: None,
+            version: None,
+            kad_udp_key_ip: None,
+            kad_udp_key_key: None,
+            verified: None,
+        };
+        let self_report_is_new = self
+            .shared
             .store
-            .insert_recv_contact(bootstrap_resp.client_id(), rx_addr, s_time)
+            .insert_report_contact(report, &self_contact, ContactSource::ReportedByRemote)
             .await?;
 
+        if self_report_is_new != 0 {
+            event!(
+                Level::INFO,
+                "bootstrap resp self report is unknown: {:?}",
+                self_contact.peer
+            );
+        }
+
         // track packet reported peers
+        let mut found_peer_ct = 0;
+        let mut total_peers = 0;
         for bs_node in bootstrap_resp.contacts()? {
-            self.shared
+            total_peers += 1;
+            found_peer_ct += self
+                .shared
                 .store
-                .insert_bootstrap_contact(&bs_node, s_time)
+                .insert_report_contact(report, &bs_node.into(), ContactSource::ReportedByBootstrap)
                 .await
                 .unwrap();
         }
+
+        event!(
+            Level::INFO,
+            "bootstrap has {}/{} new peers ({}%)",
+            found_peer_ct,
+            total_peers,
+            found_peer_ct as f64 / total_peers as f64 * 100f64
+        );
 
         Ok(())
     }
@@ -549,12 +841,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             f_nodes.read_to_end(&mut b)?;
             let nodes = remule::nodes::parse(&mut b)?.contacts.into_iter();
 
+            // FIXME: generalize report sources so we can have a report that represents this
+            // nodes.dat file import
             let mut insert_ct = 0;
             for node in nodes {
-                insert_ct += store.insert_contact(node).await?;
+                insert_ct += store.insert_peer(&node.into()).await?.0;
             }
 
-            event!(Level::INFO, "Inserted {} nodes", insert_ct);
+            event!(Level::INFO, "Inserted {} new peers", insert_ct);
 
             Ok(())
         }
