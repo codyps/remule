@@ -3,6 +3,7 @@ use either::Either;
 use emule_proto as remule;
 use fmt_extra::Hs;
 use futures::{Stream, StreamExt, TryStreamExt};
+use humantime::parse_duration;
 use remule::udp_proto::BootstrapRespContact;
 use sqlx::Executor;
 use std::io;
@@ -554,12 +555,19 @@ impl KadShared {
 
 #[derive(Debug, Clone)]
 struct Kad {
+    send_wait: Duration,
+
     shared: Arc<KadShared>,
 }
 
 impl Kad {
-    async fn from_addr<A: net::ToSocketAddrs>(addrs: A, store: Store) -> Result<Self, io::Error> {
+    async fn from_addr<A: net::ToSocketAddrs>(
+        addrs: A,
+        store: Store,
+        send_wait: Duration,
+    ) -> Result<Self, io::Error> {
         let kad = Self {
+            send_wait,
             shared: Arc::new(KadShared::from_addr(addrs, store).await?),
         };
 
@@ -580,7 +588,7 @@ impl Kad {
     }
 
     async fn bootstrap(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
-        let mut timeout_bootstrap = time::interval(Duration::from_secs(1));
+        let mut timeout_bootstrap = time::interval(self.send_wait);
 
         loop {
             let mut peers = self.shared.store.peers();
@@ -810,7 +818,15 @@ enum Action {
     FeedNodesDat { nodes_dat_path: PathBuf },
 
     /// Use known peers in the database to collect more peers
-    Collect { bind_addr: SocketAddr },
+    Collect {
+        bind_addr: SocketAddr,
+        #[structopt(
+            long = "send-wait",
+            default_value = "1s",
+            parse(try_from_str = parse_duration)
+        )]
+        send_wait: Duration,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -859,8 +875,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
             Ok(())
         }
-        Action::Collect { bind_addr } => {
-            let kad = Kad::from_addr(bind_addr, store).await?;
+        Action::Collect {
+            bind_addr,
+            send_wait,
+        } => {
+            let kad = Kad::from_addr(bind_addr, store, send_wait).await?;
             kad.run().await;
             Ok(())
         }
