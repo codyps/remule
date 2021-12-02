@@ -131,6 +131,8 @@ impl<'a> Packet<'a> {
                 z.read_to_end(&mut out)
                     .map_err(|source| Error::KadPackedDecompress { source })?;
 
+                event!(Level::DEBUG, "PACKED {} -> {}", self.raw.len(), out.len());
+
                 Ok(Kind::Kad(KadPacket::from_cow(out.into())?))
             }
             None => Err(Error::UnrecognizedUdpProto),
