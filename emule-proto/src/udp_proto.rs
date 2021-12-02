@@ -1,12 +1,18 @@
 use enum_primitive_derive::Primitive;
 use num_traits::FromPrimitive;
+use std::borrow::Cow;
 use std::convert::TryInto;
 use std::fmt;
 use std::io;
+use std::io::Read;
 use thiserror::Error;
+use tracing::{event, Level};
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("failed to decompress packed packet: {source}")]
+    KadPackedDecompress { source: std::io::Error },
+
     #[error("tag needs at least {need} bytes, have {have} (content inc)")]
     TagSizeMismatchContent { need: usize, have: usize },
 
@@ -90,16 +96,35 @@ impl<'a> Packet<'a> {
             Err(Error::PacketTooShort)?;
         }
 
-        Ok(Packet { raw })
+        Ok(Packet { raw: raw.into() })
     }
 
     pub fn udp_proto(&self) -> Option<UdpProto> {
         UdpProto::from_u8(self.raw[0])
     }
 
-    pub fn kind(&self) -> Result<Kind<'a>, Error> {
+    pub fn kind(&self) -> Result<Kind<'_>, Error> {
         match self.udp_proto() {
-            Some(UdpProto::KademliaHeader) => Ok(Kind::Kad(KadPacket::from_slice(&self.raw[1..])?)),
+            Some(UdpProto::KademliaHeader) => {
+                Ok(Kind::Kad(KadPacket::from_cow((&self.raw[1..]).into())?))
+            }
+            Some(UdpProto::KademliaPacked) => {
+                // [0] is set to KademliaHeader
+                // [1] is set to self.raw[1]
+                // [2..] is set to decompressed self.raw[2..]
+                if self.raw.len() < 2 {
+                    return Err(Error::PacketTooShort);
+                }
+
+                let mut z = flate2::bufread::ZlibDecoder::new(&self.raw[2..]);
+                // TODO: we should collect some stats to figure out if this sizing makes any sense
+                let mut out = Vec::with_capacity(self.raw.len() * 10 + 300);
+                out.push(self.raw[1]);
+                z.read_to_end(&mut out)
+                    .map_err(|source| Error::KadPackedDecompress { source })?;
+
+                Ok(Kind::Kad(KadPacket::from_cow(out.into())?))
+            }
             None => Err(Error::UnrecognizedUdpProto),
             Some(udp_proto) => Err(Error::UnhandledUdpProto { udp_proto }),
         }
@@ -147,11 +172,11 @@ pub enum Kind<'a> {
 }
 
 pub struct KadPacket<'a> {
-    raw: &'a [u8],
+    raw: Cow<'a, [u8]>,
 }
 
 impl<'a> KadPacket<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<Self, Error> {
+    pub fn from_cow(raw: Cow<'a, [u8]>) -> Result<Self, Error> {
         if raw.len() < 1 {
             return Err(Error::KadPacketTooShort);
         }
@@ -163,13 +188,21 @@ impl<'a> KadPacket<'a> {
         KadOpCode::from_u8(self.raw[0])
     }
 
-    pub fn operation(&self) -> Option<Operation<'a>> {
+    pub fn operation(&self) -> Option<Operation<'_>> {
         match self.opcode() {
             Some(KadOpCode::BootstrapResp) => Some(Operation::BootstrapResp(
                 BootstrapResp::from_slice(&self.raw[1..]).unwrap(),
             )),
             Some(KadOpCode::Req) => Some(Operation::Req(Req::from_slice(&self.raw[1..]).unwrap())),
-            _ => todo!(),
+            // someone sent us this while we were bootstrap scannning
+            opcode => {
+                event!(
+                    Level::ERROR,
+                    "packet included unhandled opcode {:?}",
+                    opcode
+                );
+                None
+            }
         }
     }
 }

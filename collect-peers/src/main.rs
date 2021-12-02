@@ -434,7 +434,7 @@ impl Store {
         let id = PeerStoreId { id: row.0 };
 
         if ct != 0 {
-            event!(Level::INFO, "unique peer: {:?}: {:?}", peer, id);
+            event!(Level::DEBUG, "unique peer: {:?}: {:?}", peer, id);
         } else {
             event!(Level::TRACE, "insert_peer: {:?}: {:?}", peer, id);
         };
@@ -606,7 +606,7 @@ impl Kad {
                             .write_to(&mut out_buf)
                             .unwrap();
                         // FIXME: this await should be elsewhere, we don't want to block other timers
-                        event!(Level::INFO, "sending to {}", peer.addr);
+                        event!(Level::DEBUG, "sending to {}", peer.addr);
                         match self.shared.socket.send_to(&out_buf[..], peer.addr).await {
                             Ok(_) => {}
                             Err(e) => {
@@ -677,7 +677,7 @@ impl Kad {
 
         if self_report_is_new != 0 {
             event!(
-                Level::INFO,
+                Level::DEBUG,
                 "bootstrap resp self report is unknown: {:?}",
                 self_contact.peer
             );
@@ -697,7 +697,7 @@ impl Kad {
         }
 
         event!(
-            Level::INFO,
+            Level::DEBUG,
             "bootstrap has {}/{} new peers ({}%)",
             found_peer_ct,
             total_peers,
