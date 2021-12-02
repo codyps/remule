@@ -632,6 +632,7 @@ impl Kad {
         recv_time: std::time::SystemTime,
         rx_addr: SocketAddr,
         bootstrap_resp: remule::udp_proto::BootstrapResp<'_>,
+        is_packed: bool,
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let reported_port = bootstrap_resp.client_port();
         if reported_port != rx_addr.port() {
@@ -654,6 +655,10 @@ impl Kad {
 
         if packet_from_unknown_peer != 0 {
             event!(Level::INFO, "bootstrap resp from unknown peer: {:?}", peer);
+        }
+
+        if is_packed {
+            event!(Level::INFO, "packed! {}", rx_addr);
         }
 
         let self_contact = Contact {
@@ -726,8 +731,14 @@ impl Kad {
             remule::udp_proto::Kind::Kad(kad_packet) => match kad_packet.operation() {
                 Some(remule::udp_proto::Operation::BootstrapResp(bootstrap_resp)) => {
                     // XXX: consider how this async affects things.
-                    self.handle_bootstrap_resp(ts, s_time, rx_addr, bootstrap_resp)
-                        .await
+                    self.handle_bootstrap_resp(
+                        ts,
+                        s_time,
+                        rx_addr,
+                        bootstrap_resp,
+                        packet.is_packed(),
+                    )
+                    .await
                 }
                 kad_operation => {
                     event!(Level::WARN, "unhandled kad op: {:?}", kad_operation);

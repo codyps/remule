@@ -103,6 +103,14 @@ impl<'a> Packet<'a> {
         UdpProto::from_u8(self.raw[0])
     }
 
+    pub fn is_packed(&self) -> bool {
+        if let Some(UdpProto::KademliaPacked) = self.udp_proto() {
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn kind(&self) -> Result<Kind<'_>, Error> {
         match self.udp_proto() {
             Some(UdpProto::KademliaHeader) => {
