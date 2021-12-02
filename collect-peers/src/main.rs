@@ -64,8 +64,9 @@ enum Error {
 const STORE_V1: &str = "remule/collect/1";
 const STORE_V2: &str = "remule/collect/2";
 const STORE_V3: &str = "remule/collect/3";
+const STORE_V4: &str = "remule/collect/4";
 
-const CURRENT_STORE_VERSION: &str = STORE_V3;
+const CURRENT_STORE_VERSION: &str = STORE_V4;
 
 #[derive(Debug, Clone, Copy)]
 struct Peer {
@@ -329,6 +330,27 @@ impl Store {
 
                             v = new_version.to_owned();
                         }
+                        STORE_V3 => {
+                            let new_version = STORE_V4;
+                            executed_update = true;
+                            c.execute(
+                                "
+                                ALTER TABLE report
+                                ADD COLUMN was_packed INTEGER;
+
+                                ALTER TABLE report
+                                ADD COLUMN packet_size INTEGER;
+                                ",
+                            )
+                            .await
+                            .map_err(|source| Error::DbUpgrade {
+                                new_version,
+                                old_version: v.clone(),
+                                source,
+                            })?;
+
+                            v = new_version.to_owned();
+                        }
                         _ => {
                             return Err(Error::DbUnknownVersion { version: v, ts });
                         }
@@ -360,6 +382,9 @@ impl Store {
                         source_peer INTEGER NOT NULL,
 
                         recv_time INTEGER NOT NULL,
+
+                        was_packed INTEGER,
+                        packet_size INTEGER,
 
                         FOREIGN KEY(source_peer) REFERENCES peer(id)
                     );
@@ -445,12 +470,16 @@ impl Store {
         &self,
         source: PeerStoreId,
         recv_time: SystemTime,
+        packet_size: Option<usize>,
+        was_packed: Option<bool>,
     ) -> Result<ReportStoreId, Error> {
         let s: (i64,) = sqlx::query_as(
-            "INSERT INTO report (source_peer, recv_time) VALUES ($1, $2) RETURNING id",
+            "INSERT INTO report (source_peer, recv_time, packet_size, was_packed) VALUES ($1, $2, $3, $4) RETURNING id",
         )
         .bind(source.id)
         .bind(recv_time.as_unix_millis())
+        .bind(packet_size.map(|x| { let x: i64 = x.try_into().unwrap(); x }))
+        .bind(was_packed)
         .fetch_one(&self.db)
         .await
         .map_err(|source| Error::DbInsertPeer { source })?;
@@ -632,7 +661,8 @@ impl Kad {
         recv_time: std::time::SystemTime,
         rx_addr: SocketAddr,
         bootstrap_resp: remule::udp_proto::BootstrapResp<'_>,
-        is_packed: bool,
+        was_packed: bool,
+        packet_size: usize,
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         let reported_port = bootstrap_resp.client_port();
         if reported_port != rx_addr.port() {
@@ -651,13 +681,17 @@ impl Kad {
         };
 
         let (packet_from_unknown_peer, peer_sid) = self.shared.store.insert_peer(&peer).await?;
-        let report = self.shared.store.insert_report(peer_sid, recv_time).await?;
+        let report = self
+            .shared
+            .store
+            .insert_report(peer_sid, recv_time, Some(packet_size), Some(was_packed))
+            .await?;
 
         if packet_from_unknown_peer != 0 {
             event!(Level::INFO, "bootstrap resp from unknown peer: {:?}", peer);
         }
 
-        if is_packed {
+        if was_packed {
             event!(Level::INFO, "packed! {}", rx_addr);
         }
 
@@ -737,6 +771,7 @@ impl Kad {
                         rx_addr,
                         bootstrap_resp,
                         packet.is_packed(),
+                        rx_data.len(),
                     )
                     .await
                 }
