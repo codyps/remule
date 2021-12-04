@@ -754,7 +754,7 @@ impl Kad {
         rx_data: &[u8],
     ) -> Result<(), Box<dyn std::error::Error + 'static>> {
         event!(
-            Level::DEBUG,
+            Level::TRACE,
             "peer: {:?} replied: {:?}",
             rx_addr,
             Hs(rx_data)
@@ -776,7 +776,12 @@ impl Kad {
                     .await
                 }
                 kad_operation => {
-                    event!(Level::WARN, "unhandled kad op: {:?}", kad_operation);
+                    event!(
+                        Level::WARN,
+                        "unhandled kad op: {:?}, {:?}",
+                        kad_operation,
+                        Hs(rx_data)
+                    );
                     Ok(())
                 }
             },
