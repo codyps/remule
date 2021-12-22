@@ -21,3 +21,6 @@ genmode = "Remote"
 extra_aliased_targets = [
     "cargo_bin_collect-peers"
 ]
+
+[profile.release]
+debug = true
