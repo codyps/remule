@@ -187,7 +187,7 @@ impl UnixMillis for std::time::SystemTime {
     }
 
     fn from_unix_millis(ts: i64) -> Self {
-        let d = std::time::Duration::from_micros(ts.try_into().unwrap());
+        let d = std::time::Duration::from_millis(ts.try_into().unwrap());
         let ts = std::time::UNIX_EPOCH + d;
         ts
     }
