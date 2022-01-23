@@ -51,15 +51,15 @@
         }) {
           inherit pkgs;
           defaultCrateOverrides = pkgs.defaultCrateOverrides // {
-            libsqlite3-sys = attrs: {
-              propagatedBuildInputs = linkInputs;
+            #libsqlite3-sys = attrs: {
+            #  propagatedBuildInputs = linkInputs;
             #  extraLinkFlags = [ "-L" "native=${SystemConfiguration.out}/Library/Frameworks" ];
-            };
-            #sqlx-macros = attrs: {
-            #  buildInputs = linkInputs;
-            #  extraLinkFlags = [ "-lfake-labrary-that-doesnot-exist" ];
             #};
-            #collect-peers = linkDeps;
+            sqlx-macros = attrs: {
+              buildInputs = linkInputs;
+            #  extraLinkFlags = [ "-lfake-labrary-that-doesnot-exist" ];
+            };
+            collect-peers = linkDeps;
           };
         };
 
