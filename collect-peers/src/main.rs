@@ -202,7 +202,8 @@ impl Store {
                         source,
                         uri: db_uri.to_owned(),
                     })?
-                    .create_if_missing(true),
+                    .create_if_missing(true)
+                    .serialized(true),
             )
             .await
             .map_err(|source| Error::DbPoolOpen {

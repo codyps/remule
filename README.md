@@ -17,6 +17,7 @@
 3. number of peers recv'd
 
     SELECT count(*) FROM (SELECT DISTINCT source_peer FROM report);
+    SELECT count(DISTINCT source_peer) FROM report;
 
 4. number of unqiue ips recv'd
 
@@ -38,6 +39,7 @@
     # also, we'd really need to to another join to get other fields like the above option
     SELECT count(*) FROM (SELECT DISTINCT a.id FROM peer a INNER JOIN peer b ON a.id <> b.id AND a.kad_id = b.kad_id ORDER BY a.kad_id);
 
-7. compare number of unique kad_ids with number of unique peers
+7. compare number of unique kad_ids with number of ips with number of unique peers
 
-    SELECT COUNT(DISTINCT kad_id), COUNT(*) FROM peer;
+    SELECT COUNT(DISTINCT kad_id), COUNT(DISTINCT ip), COUNT(*) FROM peer;
+
