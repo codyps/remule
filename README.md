@@ -37,3 +37,7 @@
     # EXPLAIN is shorter than the above option though (which is a real mess in EXPLAIN).
     # also, we'd really need to to another join to get other fields like the above option
     SELECT count(*) FROM (SELECT DISTINCT a.id FROM peer a INNER JOIN peer b ON a.id <> b.id AND a.kad_id = b.kad_id ORDER BY a.kad_id);
+
+7. compare number of unique kad_ids with number of unique peers
+
+    SELECT COUNT(DISTINCT kad_id), COUNT(*) FROM peer;
