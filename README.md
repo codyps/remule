@@ -16,7 +16,6 @@
 
 3. number of peers recv'd
 
-    SELECT count(*) FROM (SELECT DISTINCT source_peer FROM report);
     SELECT count(DISTINCT source_peer) FROM report;
 
 4. number of unqiue ips recv'd

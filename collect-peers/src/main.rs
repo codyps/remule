@@ -1,3 +1,4 @@
+use anyhow::Context;
 use core::fmt;
 use either::Either;
 use emule_proto as remule;
@@ -9,6 +10,7 @@ use sqlx::Executor;
 use std::io;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
+use std::os::raw::{c_int, c_void};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -16,7 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use structopt::StructOpt;
 use thiserror::Error;
 use tokio::{net, task, time};
-use tracing::{event, Level};
+use tracing::{error, event, warn, Level};
 
 #[derive(Debug, Error)]
 enum Error {
@@ -59,6 +61,12 @@ enum Error {
 
     #[error("db update last_send failed: {source}")]
     DbUpdateSent { source: sqlx::Error },
+
+    #[error("{source}")]
+    Anyhow {
+        #[from]
+        source: anyhow::Error,
+    },
 }
 
 const STORE_V1: &str = "remule/collect/1";
@@ -193,9 +201,26 @@ impl UnixMillis for std::time::SystemTime {
     }
 }
 
+unsafe extern "C" fn busy_handler_forever(_: *mut c_void, ct: c_int) -> c_int {
+    if ct > 4 {
+        warn!("busy {ct} times!");
+    }
+    let max_delay = 100000u64;
+    let delay_per_ct = 1000;
+    let ct_before_max = max_delay / delay_per_ct;
+    let ct: u64 = ct.try_into().unwrap();
+    std::thread::sleep(Duration::from_micros(if ct < ct_before_max {
+        (ct * delay_per_ct).try_into().unwrap()
+    } else {
+        max_delay
+    }));
+    1
+}
+
 impl Store {
     pub async fn new(db_uri: &str) -> Result<Self, Error> {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
             .connect_with(
                 sqlx::sqlite::SqliteConnectOptions::from_str(&db_uri)
                     .map_err(|source| Error::DbPoolOpen {
@@ -203,7 +228,7 @@ impl Store {
                         uri: db_uri.to_owned(),
                     })?
                     .create_if_missing(true)
-                    .serialized(true),
+                    .busy_handler_raw(busy_handler_forever),
             )
             .await
             .map_err(|source| Error::DbPoolOpen {
@@ -211,7 +236,7 @@ impl Store {
                 uri: db_uri.to_owned(),
             })?;
 
-        let mut c = db.begin().await.unwrap();
+        let mut c = db.begin().await.context("begin tx in new")?;
 
         let v: Option<(String, std::time::SystemTime)> =
             match sqlx::query_as("SELECT version, ts FROM version ORDER BY ts DESC LIMIT 1")
@@ -525,6 +550,21 @@ impl Store {
         Ok(ct)
     }
 
+    pub async fn least_recently_contacted_peer(&self) -> Result<Option<PeerStoreInfo>, Error> {
+        if let Some(peer) = self.peers().next().await {
+            let peer = peer.context("getting next peer failed")?;
+            match peer {
+                Either::Left(_qr) => {
+                    return Ok(None);
+                }
+                Either::Right(peer) => {
+                    return Ok(Some(peer));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     pub fn peers(
         &self,
     ) -> impl Stream<Item = Result<Either<sqlx::sqlite::SqliteQueryResult, PeerStoreInfo>, Error>>
@@ -610,49 +650,43 @@ impl Kad {
 
             // spawn bootstrapping/timers/etc
             task::spawn(async move {
-                kad.bootstrap().await.unwrap();
+                loop {
+                    if let Err(e) = kad.bootstrap().await {
+                        error!("bootstrap failed: {e}");
+                    } else {
+                        error!("bootstrap returned without failure");
+                    }
+                }
             });
         }
 
-        self.process_rx().await.unwrap();
+        self.process_rx().await.expect("process rx failed");
     }
 
-    async fn bootstrap(&self) -> Result<(), Box<dyn std::error::Error + 'static>> {
+    async fn bootstrap(&self) -> Result<(), anyhow::Error> {
         let mut timeout_bootstrap = time::interval(self.send_wait);
 
         loop {
-            let mut peers = self.shared.store.peers();
+            let peer = self.shared.store.least_recently_contacted_peer().await?;
 
-            while let Some(peer) = peers.next().await {
-                let peer = peer.unwrap();
-                match peer {
-                    Either::Left(_qr) => {
-                        // end of the query, get us a new one
+            if let Some(peer) = peer {
+                let mut out_buf = Vec::new();
+                remule::udp_proto::OperationBuf::BootstrapReq
+                    .write_to(&mut out_buf)
+                    .unwrap();
+                // FIXME: this await should be elsewhere, we don't want to block other timers
+                event!(Level::DEBUG, "sending to {}", peer.addr);
+                match self.shared.socket.send_to(&out_buf[..], peer.addr).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        event!(Level::ERROR, "send_to failed: {}", e);
+                        tokio::time::sleep(Duration::from_secs(1)).await;
                         continue;
                     }
-                    Either::Right(peer) => {
-                        let mut out_buf = Vec::new();
-                        remule::udp_proto::OperationBuf::BootstrapReq
-                            .write_to(&mut out_buf)
-                            .unwrap();
-                        // FIXME: this await should be elsewhere, we don't want to block other timers
-                        event!(Level::DEBUG, "sending to {}", peer.addr);
-                        match self.shared.socket.send_to(&out_buf[..], peer.addr).await {
-                            Ok(_) => {}
-                            Err(e) => {
-                                event!(Level::ERROR, "send_to failed: {}", e);
-                                tokio::time::sleep(Duration::from_secs(1)).await;
-                                continue;
-                            }
-                        }
-                        self.shared.store.mark_peer_sent(peer.id).await?;
-                    }
                 }
-
+                self.shared.store.mark_peer_sent(peer.id).await?;
                 timeout_bootstrap.tick().await;
             }
-
-            // TODO: rexamine peers?
         }
     }
 
@@ -727,13 +761,26 @@ impl Kad {
         let mut found_peer_ct = 0;
         let mut total_peers = 0;
         for bs_node in bootstrap_resp.contacts()? {
-            total_peers += 1;
-            found_peer_ct += self
-                .shared
-                .store
-                .insert_report_contact(report, &bs_node.into(), ContactSource::ReportedByBootstrap)
-                .await
-                .unwrap();
+            let n = bs_node.into();
+            // FIXME: this loop is due to sqlite RowNotFound after Busy errors. Seems very sketchy.
+            // Unclear why the RowNotFound occurs.
+            loop {
+                match self
+                    .shared
+                    .store
+                    .insert_report_contact(report, &n, ContactSource::ReportedByBootstrap)
+                    .await
+                {
+                    Ok(v) => {
+                        total_peers += 1;
+                        found_peer_ct += v;
+                        break;
+                    }
+                    Err(e) => {
+                        error!("inserting peer failed: {e}");
+                    }
+                }
+            }
         }
 
         event!(
