@@ -342,7 +342,7 @@ impl<'a> BootstrapResp<'a> {
     }
 
     pub fn client_version(&self) -> u8 {
-        self.raw[(16 + 2)]
+        self.raw[16 + 2]
     }
 
     pub fn num_contacts(&self) -> u16 {

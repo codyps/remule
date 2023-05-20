@@ -1,36 +1,35 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
 http_archive(
     name = "rules_rust",
-    sha256 = "d6a8bc37502f252ef190b37945c922e0d0104dc2250940a3ea5f9c42e7a0dc10",
-    strip_prefix = "rules_rust-e2f0fccda912daac686b533ad77c5bc5d2f2ddb7",
-    urls = [
-        # `main` branch as of 2021-11-21
-        "https://github.com/bazelbuild/rules_rust/archive/e2f0fccda912daac686b533ad77c5bc5d2f2ddb7.tar.gz",
+    sha256 = "25209daff2ba21e818801c7b2dab0274c43808982d6aea9f796d899db6319146",
+    urls = ["https://github.com/bazelbuild/rules_rust/releases/download/0.21.1/rules_rust-v0.21.1.tar.gz"],
+)
+
+load("@rules_rust//rust:repositories.bzl", "rules_rust_dependencies", "rust_register_toolchains")
+
+rules_rust_dependencies()
+
+rust_register_toolchains()
+
+load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")
+
+crate_universe_dependencies()
+
+load("@rules_rust//crate_universe:defs.bzl", "crates_repository")
+
+crates_repository(
+    name = "crate_index",
+    cargo_lockfile = "//:Cargo.lock",
+    lockfile = "//:Cargo.Bazel.lock",
+    manifests = [
+        "//:Cargo.toml",
+        "//collect-peers:Cargo.toml",
+        "//emule-proto:Cargo.toml",
+        "//kad:Cargo.toml",
+        "//remule-db:Cargo.toml",
     ],
 )
 
-load("@rules_rust//rust:repositories.bzl", "rust_repositories")
+load("@crate_index//:defs.bzl", "crate_repositories")
 
-rust_repositories()
-
-load("//cargo:crates.bzl", "raze_fetch_remote_crates")
-
-raze_fetch_remote_crates()
-
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-http_archive(
-    name = "cargo_raze",
-    sha256 = "ee87d297a387b9c5aeae5181232bdf059f7bbb47c81c79833325cea2b8b58860",
-    strip_prefix = "cargo-raze-0bc9b000d3cbbfde8ff2df02001a80faaa771552",
-    url = "https://github.com/google/cargo-raze/archive/0bc9b000d3cbbfde8ff2df02001a80faaa771552.tar.gz",
-)
-
-load("@cargo_raze//:repositories.bzl", "cargo_raze_repositories")
-
-cargo_raze_repositories()
-
-load("@cargo_raze//:transitive_deps.bzl", "cargo_raze_transitive_deps")
-
-cargo_raze_transitive_deps()
+crate_repositories()

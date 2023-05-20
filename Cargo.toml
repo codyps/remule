@@ -1,25 +1,9 @@
-
 [workspace]
 members = [
 	'remule-db',
 	'kad',
 	'collect-peers',
 	'emule-proto',
-]
-
-[workspace.metadata.raze]
-workspace_path = "//cargo"
-package_aliases_dir = "."
-targets = [
-    "x86_64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-    "x86_64-unknown-linux-gnu",
-]
-genmode = "Remote"
-
-[workspace.metadata.raze.crates.collect-peers.'*']
-extra_aliased_targets = [
-    "cargo_bin_collect-peers"
 ]
 
 [profile.release]

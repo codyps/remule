@@ -201,22 +201,6 @@ impl UnixMillis for std::time::SystemTime {
     }
 }
 
-unsafe extern "C" fn busy_handler_forever(_: *mut c_void, ct: c_int) -> c_int {
-    if ct > 4 {
-        warn!("busy {ct} times!");
-    }
-    let max_delay = 100000u64;
-    let delay_per_ct = 1000;
-    let ct_before_max = max_delay / delay_per_ct;
-    let ct: u64 = ct.try_into().unwrap();
-    std::thread::sleep(Duration::from_micros(if ct < ct_before_max {
-        (ct * delay_per_ct).try_into().unwrap()
-    } else {
-        max_delay
-    }));
-    1
-}
-
 impl Store {
     pub async fn new(db_uri: &str) -> Result<Self, Error> {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
@@ -227,8 +211,7 @@ impl Store {
                         source,
                         uri: db_uri.to_owned(),
                     })?
-                    .create_if_missing(true)
-                    .busy_handler_raw(busy_handler_forever),
+                    .create_if_missing(true),
             )
             .await
             .map_err(|source| Error::DbPoolOpen {
