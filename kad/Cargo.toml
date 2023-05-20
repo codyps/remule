@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = "2.33.3"
+clap = "3"
 fmt-extra = "0.2.1"
-async-std = { version = "1.9.0", features = ["attributes", "unstable"]}
-futures = "0.3.4"
-rand = "0.8.2"
-thiserror = "*"
+async-std = { version = "1", features = ["attributes", "unstable"]}
+futures = "0.3"
+rand = "0.8"
+thiserror = "1"
 emule-proto = { version = "*", path = "../emule-proto" }
