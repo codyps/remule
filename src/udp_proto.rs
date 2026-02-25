@@ -1,9 +1,9 @@
-use num_traits::FromPrimitive;
 use enum_primitive_derive::Primitive;
-use std::error::Error;
-use std::io;
-use std::fmt;
+use num_traits::FromPrimitive;
 use std::convert::TryInto;
+use std::error::Error;
+use std::fmt;
+use std::io;
 
 /// The first byte of a emule/kad udp packet _may_ be one of these bytes, which establishes the
 /// content of the packet.
@@ -12,7 +12,6 @@ use std::convert::TryInto;
 #[derive(Debug, PartialEq, Eq, Primitive)]
 #[repr(u8)]
 pub enum UdpProto {
-
     Emule = 0xC5,
     /// uncompress [2..] and then process as `KademliaHeader` (op code is uncompressed)
     KademliaPacked = 0xE5,
@@ -40,9 +39,7 @@ impl<'a> Packet<'a> {
             Err("need at least 1 byte in packet")?;
         }
 
-        Ok(Packet {
-            raw
-        })
+        Ok(Packet { raw })
     }
 
     pub fn udp_proto(&self) -> Option<UdpProto> {
@@ -51,11 +48,11 @@ impl<'a> Packet<'a> {
 
     pub fn kind(&self) -> Result<Kind<'a>, Box<dyn Error>> {
         match self.udp_proto() {
-            Some(UdpProto::KademliaHeader) => {
-                Ok(Kind::Kad(KadPacket::from_slice(&self.raw[1..])?))
-            },
-            None => { Err("unrecognized udp proto")? },
-            _ => { todo!() }
+            Some(UdpProto::KademliaHeader) => Ok(Kind::Kad(KadPacket::from_slice(&self.raw[1..])?)),
+            None => Err("unrecognized udp proto")?,
+            _ => {
+                todo!()
+            }
         }
     }
 
@@ -64,13 +61,12 @@ impl<'a> Packet<'a> {
         match self.udp_proto() {
             None => {
                 // might be an encrypted packet
-            },
+            }
             Some(_v) => {
                 // non-obfuscated packet
                 return;
             }
         }
-
 
         todo!();
         // packets are obfuscated via a couple types of keys:
@@ -111,9 +107,7 @@ impl<'a> KadPacket<'a> {
             Err("kad packet needs at least 1 byte")?
         }
 
-        Ok(Self {
-            raw
-        })
+        Ok(Self { raw })
     }
 
     pub fn opcode(&self) -> Option<KadOpCode> {
@@ -122,16 +116,10 @@ impl<'a> KadPacket<'a> {
 
     pub fn operation(&self) -> Option<Operation<'a>> {
         match self.opcode() {
-            Some(KadOpCode::BootstrapResp) => {
-                Some(Operation::BootstrapResp(
-                    BootstrapResp::from_slice(&self.raw[1..]).unwrap()
-                ))
-            },
-            Some(KadOpCode::Req) => {
-                Some(Operation::Req(
-                    Req::from_slice(&self.raw[1..]).unwrap()
-                ))
-            }
+            Some(KadOpCode::BootstrapResp) => Some(Operation::BootstrapResp(
+                BootstrapResp::from_slice(&self.raw[1..]).unwrap(),
+            )),
+            Some(KadOpCode::Req) => Some(Operation::Req(Req::from_slice(&self.raw[1..]).unwrap())),
             _ => todo!(),
         }
     }
@@ -150,7 +138,7 @@ impl<'a> fmt::Debug for KadPacket<'a> {
 #[repr(u8)]
 pub enum KadOpCode {
     BootstrapReqV0 = 0x00,
-    BootstrapReq  = 0x01,
+    BootstrapReq = 0x01,
     BootstrapResV0 = 0x08,
     BootstrapResp = 0x09,
     HelloReqV0 = 0x10,
@@ -199,11 +187,10 @@ pub enum KadOpCode {
 #[repr(u8)]
 pub enum EmuleOpCode {
     ReAskCallBackUdp = 0,
-    
 }
 
 /// Representation of an entire `KadOpCode` with the associated data
-/// 
+///
 /// Each UDP packet includes 1 of these.
 ///
 /// ```norust
@@ -228,7 +215,7 @@ pub struct BootstrapResp<'a> {
     raw: &'a [u8],
 }
 
-/// 
+///
 /// ```norust
 /// struct BootstrapResp {
 ///     client_id: le128,
@@ -245,9 +232,7 @@ impl<'a> BootstrapResp<'a> {
             Err("not enough bytes in bootstrap responce")?;
         }
 
-        Ok(BootstrapResp {
-            raw
-        })
+        Ok(BootstrapResp { raw })
     }
 
     /// Kad ID of the client that sent this bootstrap responce
@@ -269,7 +254,7 @@ impl<'a> BootstrapResp<'a> {
     }
 
     pub fn contacts(&self) -> Result<BootstrapRespContacts<'a>, Box<dyn Error>> {
-        BootstrapRespContacts::from_slice(self.num_contacts(), &self.raw[(16 + 2 + 1 + 2) ..])
+        BootstrapRespContacts::from_slice(self.num_contacts(), &self.raw[(16 + 2 + 1 + 2)..])
     }
 }
 
@@ -288,19 +273,21 @@ impl<'a> fmt::Debug for BootstrapResp<'a> {
 /// Request nodes nearby a given node-id.
 #[derive(Clone)]
 pub struct Req<'a> {
-    raw: &'a [u8]
+    raw: &'a [u8],
 }
 
 impl<'a> Req<'a> {
     pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
         let need_size = 1 + 16 + 16;
         if raw.len() != need_size {
-            return Err(format!("Req size mismatch: have {}, need {}", raw.len(), need_size))?;
+            return Err(format!(
+                "Req size mismatch: have {}, need {}",
+                raw.len(),
+                need_size
+            ))?;
         }
 
-        Ok(Req {
-            raw
-        })
+        Ok(Req { raw })
     }
 
     /// usage unclear. warning emitted if `type & 0x1f` is 0
@@ -309,7 +296,7 @@ impl<'a> Req<'a> {
     }
 
     /// the node id being searched for
-    /// 
+    ///
     /// Reply with the nodes closest to this node
     ///
     /// FIXME: how is the number of returned nodes determined?
@@ -335,19 +322,21 @@ impl<'a> fmt::Debug for Req<'a> {
 
 #[derive(Clone)]
 pub struct Res<'a> {
-    raw: &'a [u8]
+    raw: &'a [u8],
 }
 
 impl<'a> Res<'a> {
     pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
         let need_size = 16 + 1;
         if raw.len() != need_size {
-            return Err(format!("Res size mismatch: have {}, need {}", raw.len(), need_size))?;
+            return Err(format!(
+                "Res size mismatch: have {}, need {}",
+                raw.len(),
+                need_size
+            ))?;
         }
 
-        let v = Self {
-            raw
-        };
+        let v = Self { raw };
 
         let mut r = raw;
         for _ in 0..v.num_contacts() {
@@ -356,9 +345,7 @@ impl<'a> Res<'a> {
             r = rr;
         }
 
-        Ok(Self {
-            raw
-        })
+        Ok(Self { raw })
     }
 
     pub fn target(&self) -> u128 {
@@ -378,7 +365,7 @@ impl<'a> Res<'a> {
     }
 }
 
-impl <'a> fmt::Debug for Res<'a> {
+impl<'a> fmt::Debug for Res<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("Res")
             .field("target", &self.target())
@@ -395,17 +382,13 @@ pub struct ResContacts<'a> {
 
 impl<'a> ResContacts<'a> {
     pub fn from_slice(raw: &'a [u8]) -> Self {
-        Self {
-            raw
-        }
+        Self { raw }
     }
 }
 
 impl<'a> fmt::Debug for ResContacts<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_list()
-            .entries(self.clone())
-            .finish()
+        fmt.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -414,7 +397,7 @@ impl<'a> Iterator for ResContacts<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.raw.len() == 0 {
-            return None
+            return None;
         }
 
         // NOTE: validated in `Res::from_slice()`
@@ -428,21 +411,23 @@ impl<'a> Iterator for ResContacts<'a> {
 /// `Res` includes a number of these contacts
 #[derive(Clone)]
 pub struct ResContact<'a> {
-    raw: &'a [u8]
+    raw: &'a [u8],
 }
 
 impl<'a> ResContact<'a> {
     pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Box<dyn Error>> {
         let need_size = 16 + 4 + 2 + 2 + 1;
         if raw.len() < need_size {
-            return Err(format!("Res contact size mismatch: have {}, need {}", raw.len(), need_size))?;
+            return Err(format!(
+                "Res contact size mismatch: have {}, need {}",
+                raw.len(),
+                need_size
+            ))?;
         }
 
         let (x, rem) = raw.split_at(need_size);
 
-        Ok((Self {
-            raw: x
-        }, rem))
+        Ok((Self { raw: x }, rem))
     }
 
     pub fn id(&self) -> u128 {
@@ -491,14 +476,12 @@ impl<'a> fmt::Debug for ResContact<'a> {
 /// ```
 #[derive(Clone)]
 pub struct SearchRes<'a> {
-    raw: &'a [u8]
+    raw: &'a [u8],
 }
 
 impl<'a> SearchRes<'a> {
     pub fn from_slice(raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
-        Ok(SearchRes {
-            raw
-        })
+        Ok(SearchRes { raw })
     }
 
     pub fn source_id(&self) -> u128 {
@@ -506,15 +489,15 @@ impl<'a> SearchRes<'a> {
     }
 
     pub fn target_id(&self) -> u128 {
-        u128::from_le_bytes(self.raw[16..(16+16)].try_into().unwrap())
+        u128::from_le_bytes(self.raw[16..(16 + 16)].try_into().unwrap())
     }
 
     pub fn result_ct(&self) -> u16 {
-        u16::from_le_bytes(self.raw[(16+16)..(16+16+2)].try_into().unwrap())
+        u16::from_le_bytes(self.raw[(16 + 16)..(16 + 16 + 2)].try_into().unwrap())
     }
 
     pub fn results(&self) -> Result<(SearchResults<'a>, &'a [u8]), Box<dyn Error>> {
-        SearchResults::from_slice(self.result_ct(), &self.raw[(16+16+2)..])
+        SearchResults::from_slice(self.result_ct(), &self.raw[(16 + 16 + 2)..])
     }
 }
 
@@ -540,9 +523,12 @@ impl<'a> SearchResults<'a> {
         let mut rem = raw;
         loop {
             if num == 0 {
-                return Ok((SearchResults {
-                    raw: &raw[..(raw.len() - rem.len())]
-                }, rem))
+                return Ok((
+                    SearchResults {
+                        raw: &raw[..(raw.len() - rem.len())],
+                    },
+                    rem,
+                ));
             }
 
             num -= 1;
@@ -556,8 +542,7 @@ impl<'a> SearchResults<'a> {
 impl<'a> fmt::Debug for SearchResults<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         // TODO: add results here
-        fmt.debug_struct("SearchResults")
-            .finish()
+        fmt.debug_struct("SearchResults").finish()
     }
 }
 
@@ -578,7 +563,7 @@ impl<'a> Iterator for SearchResults<'a> {
 
 #[derive(Clone)]
 pub struct SearchResult<'a> {
-    raw: &'a [u8]
+    raw: &'a [u8],
 }
 
 ///
@@ -593,9 +578,7 @@ impl<'a> SearchResult<'a> {
         let r = &raw[16..];
         // use taglist to determine the length here
         let (_, rem) = TagList::from_slice(&r)?;
-        Ok((Self {
-            raw: raw
-        }, rem))
+        Ok((Self { raw: raw }, rem))
     }
 
     pub fn id(&self) -> u128 {
@@ -663,22 +646,26 @@ pub enum TagType {
 }
 
 impl<'a> TagList<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &[u8]), Box<dyn Error>> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Box<dyn Error>> {
         if raw.len() < 4 {
-            Err(format!("tag list needs at least space for a count (4 bytes), have {} bytes", raw.len()))?;
+            Err(format!(
+                "tag list needs at least space for a count (4 bytes), have {} bytes",
+                raw.len()
+            ))?;
         }
 
-        let tl = TagList {
-            raw
-        };
-        
+        let tl = TagList { raw };
+
         let mut ct = tl.count();
         let mut rem = tl.item_bytes();
         loop {
             if ct == 0 {
-                return Ok((TagList {
-                    raw: &raw[..(raw.len() - rem.len())],
-                }, rem));
+                return Ok((
+                    TagList {
+                        raw: &raw[..(raw.len() - rem.len())],
+                    },
+                    rem,
+                ));
             }
 
             ct -= 1;
@@ -709,9 +696,7 @@ pub struct TagListIter<'a> {
 
 impl<'a> TagListIter<'a> {
     pub fn from_slice(raw: &'a [u8]) -> Self {
-        Self {
-            raw
-        }
+        Self { raw }
     }
 }
 
@@ -719,12 +704,11 @@ impl<'a> Iterator for TagListIter<'a> {
     type Item = Result<Tag<'a>, Box<dyn Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-
         match Tag::from_slice(self.raw) {
             Ok((i, rem)) => {
                 self.raw = rem;
                 Some(Ok(i))
-            },
+            }
             Err(e) => Some(Err(e)),
         }
     }
@@ -743,16 +727,25 @@ pub struct Tag<'a> {
 }
 
 impl<'a> Tag<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a[u8]), Box<dyn Error>> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Box<dyn Error>> {
         let need_size = 1 + 2;
         if raw.len() < need_size {
-            Err(format!("tag needs at least {} bytes, have {}", need_size, raw.len()))?;
+            Err(format!(
+                "tag needs at least {} bytes, have {}",
+                need_size,
+                raw.len()
+            ))?;
         }
 
         let name_len = u16::from_le_bytes(raw[1..3].try_into().unwrap()) as usize;
         let need_size = need_size + name_len;
         if raw.len() < need_size {
-            Err(format!("tag needs at least {} bytes, have {} (inc name_len {})", need_size, raw.len(), name_len))?;
+            Err(format!(
+                "tag needs at least {} bytes, have {} (inc name_len {})",
+                need_size,
+                raw.len(),
+                name_len
+            ))?;
         }
 
         let tag_type = match TagType::from_u8(raw[0]) {
@@ -762,58 +755,53 @@ impl<'a> Tag<'a> {
 
         let value_offs = 3 + name_len;
         let content_bytes = match tag_type {
-            TagType::Hash => {
-                16
-            },
+            TagType::Hash => 16,
             TagType::String_ => {
                 let need_size = need_size + 2;
                 if raw.len() < need_size {
-                    Err(format!("tag needs at least {} bytes, have {} (string value len)", need_size, raw.len()))?;
+                    Err(format!(
+                        "tag needs at least {} bytes, have {} (string value len)",
+                        need_size,
+                        raw.len()
+                    ))?;
                 }
 
-                let s_len = u16::from_le_bytes(raw[value_offs..(value_offs + 6)].try_into().unwrap()) as usize;
+                let s_len =
+                    u16::from_le_bytes(raw[value_offs..(value_offs + 6)].try_into().unwrap())
+                        as usize;
 
                 2 + s_len
-            },
-            TagType::Uint64 => {
-                8
-            },
-            TagType::Uint32 => {
-                4
-            },
-            TagType::Uint16 => {
-                2
-            },
-            TagType::Uint8 => {
-                1 
-            },
-            TagType::Float32 => {
-                4
-            },
+            }
+            TagType::Uint64 => 8,
+            TagType::Uint32 => 4,
+            TagType::Uint16 => 2,
+            TagType::Uint8 => 1,
+            TagType::Float32 => 4,
             TagType::Bsob => {
                 todo!()
-            },
+            }
             o => {
                 return Err(format!("unhandled tag type: {:?}", o))?;
-            },
+            }
         };
 
         let need_size = need_size + content_bytes;
 
         if raw.len() < need_size {
-            Err(format!("tag needs at least {} bytes, have {} (content inc)",
-                need_size, raw.len()))?;
+            Err(format!(
+                "tag needs at least {} bytes, have {} (content inc)",
+                need_size,
+                raw.len()
+            ))?;
         }
 
         let (a, rem) = raw.split_at(need_size);
 
-        Ok((Tag {
-            raw: a,
-        }, rem))
+        Ok((Tag { raw: a }, rem))
     }
 
     fn name_len(&self) -> usize {
-        u16::from_le_bytes(self.raw[1..3].try_into().unwrap()) as usize 
+        u16::from_le_bytes(self.raw[1..3].try_into().unwrap()) as usize
     }
 
     pub fn name(&self) -> &'a [u8] {
@@ -830,28 +818,25 @@ impl<'a> Tag<'a> {
 
     pub fn value(&self) -> TagValue<'a> {
         match self.tag_type() {
-            TagType::Hash => {
-                TagValue::Hash(self.value_bytes())
-            },
+            TagType::Hash => TagValue::Hash(self.value_bytes()),
             TagType::String_ => {
-                let s_len = u16::from_le_bytes(self.value_bytes()[..2].try_into().unwrap()) as usize;
+                let s_len =
+                    u16::from_le_bytes(self.value_bytes()[..2].try_into().unwrap()) as usize;
                 TagValue::String_(&self.value_bytes()[2..(2 + s_len)])
-            },
+            }
             TagType::Uint64 => {
                 TagValue::Uint64(u64::from_le_bytes(self.value_bytes().try_into().unwrap()))
-            },
+            }
             TagType::Uint32 => {
                 TagValue::Uint32(u32::from_le_bytes(self.value_bytes().try_into().unwrap()))
-            },
+            }
             TagType::Uint16 => {
                 TagValue::Uint16(u16::from_le_bytes(self.value_bytes().try_into().unwrap()))
-            },
-            TagType::Uint8 => {
-                TagValue::Uint8(self.value_bytes()[0])
-            },
+            }
+            TagType::Uint8 => TagValue::Uint8(self.value_bytes()[0]),
             TagType::Float32 => {
                 TagValue::Float32(f32::from_le_bytes(self.value_bytes().try_into().unwrap()))
-            },
+            }
             _ => panic!("unhandled tag_type, sync `Tag::value` and `Tag::from_slice`"),
         }
     }
@@ -876,7 +861,7 @@ pub enum TagValue<'a> {
     Uint16(u16),
     Uint8(u8),
     Float32(f32),
-    Bsob(&'a [u8])
+    Bsob(&'a [u8]),
 }
 
 #[derive(Clone)]
@@ -887,23 +872,23 @@ pub struct BootstrapRespContacts<'a> {
 impl<'a> BootstrapRespContacts<'a> {
     pub fn from_slice(num: u16, raw: &'a [u8]) -> Result<Self, Box<dyn Error>> {
         // We don't use `num` except for validation.
-        let each_size = 16 + 4 + 2 + 2 + 1; 
+        let each_size = 16 + 4 + 2 + 2 + 1;
         let need_size = each_size * num as usize;
         if raw.len() != need_size {
-            Err(format!("bootstrap respo contacts has wrong size: need {}, have {}", need_size, raw.len()))?;
+            Err(format!(
+                "bootstrap respo contacts has wrong size: need {}, have {}",
+                need_size,
+                raw.len()
+            ))?;
         }
 
-        Ok(BootstrapRespContacts {
-            raw
-        })
+        Ok(BootstrapRespContacts { raw })
     }
 }
 
 impl<'a> fmt::Debug for BootstrapRespContacts<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_list()
-            .entries(self.clone())
-            .finish()
+        fmt.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -926,7 +911,7 @@ pub struct BootstrapRespContact<'a> {
 }
 
 impl<'a> BootstrapRespContact<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> (Self, &'a[u8]) {
+    pub fn from_slice(raw: &'a [u8]) -> (Self, &'a [u8]) {
         let n = 16 + 4 + 2 + 2 + 1;
         if raw.len() < n {
             panic!("bad brc len: have: {}, need: {}", raw.len(), n);
@@ -934,9 +919,7 @@ impl<'a> BootstrapRespContact<'a> {
 
         let (raw, rem) = raw.split_at(n);
 
-        (BootstrapRespContact {
-            raw
-        }, rem)
+        (BootstrapRespContact { raw }, rem)
     }
 
     pub fn client_id(&self) -> u128 {
@@ -1004,7 +987,6 @@ pub enum OperationBuf {
         // our port (for reply)
         // XXX: unclear why the source port is not used by the client recieving this.
         src_client_port: u16,
-
         // if contact version > 6, then include the client's udp key and id
     },
 }
@@ -1017,9 +999,10 @@ impl OperationBuf {
     /// Note: we don't perform encryption or compression for any operation right now.
     pub fn write_to<W: io::Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
-            OperationBuf::BootstrapReq => {
-                w.write_all(&[UdpProto::KademliaHeader as u8, KadOpCode::BootstrapReq as u8])
-            },
+            OperationBuf::BootstrapReq => w.write_all(&[
+                UdpProto::KademliaHeader as u8,
+                KadOpCode::BootstrapReq as u8,
+            ]),
             _ => todo!(),
         }
     }
@@ -1064,8 +1047,7 @@ pub enum TagValueBuf {
 
 impl<'a> PartialEq<Tag<'a>> for TagBuf {
     fn eq(&self, other: &Tag<'a>) -> bool {
-        self.name.eq(&other.name())
-            && self.value.eq(&other.value())
+        self.name.eq(&other.name()) && self.value.eq(&other.value())
     }
 }
 
@@ -1078,10 +1060,22 @@ impl<'a> PartialEq<TagBuf> for Tag<'a> {
 impl<'a> PartialEq<TagValue<'a>> for TagValueBuf {
     fn eq(&self, other: &TagValue<'a>) -> bool {
         match self {
-            TagValueBuf::Uint8(a) => match other { TagValue::Uint8(b) if a == b => true, _ => false },
-            TagValueBuf::Uint16(a) => match other { TagValue::Uint16(b) if a == b => true, _ => false },
-            TagValueBuf::Uint32(a) => match other { TagValue::Uint32(b) if a == b => true, _ => false },
-            TagValueBuf::Uint64(a) => match other { TagValue::Uint64(b) if a == b => true, _ => false },
+            TagValueBuf::Uint8(a) => match other {
+                TagValue::Uint8(b) if a == b => true,
+                _ => false,
+            },
+            TagValueBuf::Uint16(a) => match other {
+                TagValue::Uint16(b) if a == b => true,
+                _ => false,
+            },
+            TagValueBuf::Uint32(a) => match other {
+                TagValue::Uint32(b) if a == b => true,
+                _ => false,
+            },
+            TagValueBuf::Uint64(a) => match other {
+                TagValue::Uint64(b) if a == b => true,
+                _ => false,
+            },
         }
     }
 }
