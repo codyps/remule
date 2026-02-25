@@ -1,0 +1,13 @@
+[package]
+name = "kad"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = "3"
+fmt-extra = "0.2.1"
+async-std = { version = "1", features = ["attributes", "unstable"]}
+futures = "0.3"
+rand = "0.8"
+thiserror = "1"
+emule-proto = { version = "*", path = "../emule-proto" }

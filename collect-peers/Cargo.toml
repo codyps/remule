@@ -1,0 +1,20 @@
+[package]
+name = "collect-peers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+atty = "0.2"
+either = "1"
+emule-proto = { version = "*", path = "../emule-proto" }
+fmt-extra = "0.2.1"
+futures = "0.3"
+humantime = "2"
+rand = "0.8"
+sqlx = { version = "0.6", features = [ "runtime-tokio-rustls", "sqlite", "any", "postgres"] }
+structopt = "0.3"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }
+anyhow = "*"

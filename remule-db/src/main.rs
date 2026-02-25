@@ -1,6 +1,7 @@
 use clap::{Arg, App, SubCommand, crate_name, crate_version, crate_authors};
 use std::error::Error;
 use std::io::Read;
+use emule_proto as remule;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new(crate_name!())
@@ -56,7 +57,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Ok(mut h) => {
                         let mut b = Vec::default();
                         h.read_to_end(&mut b)?;
-                        println!("{:?}", remule::nodes::parse(&mut b));
+                        let nodes = remule::nodes::parse(&mut b)?;
+
+                        println!("{}", serde_json::to_string(&nodes)?);
                     },
                     Err(e) => {
                         eprintln!("error: could not open {:?}: {:?}", f, e);

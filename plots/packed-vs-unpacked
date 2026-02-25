@@ -1,0 +1,14 @@
+set terminal svg
+#set terminal pngcairo
+#set logscale x 50
+set logscale y 2
+
+set nonlinear x via log10(x/100) inverse 100*10**(x) 
+#set nonlinear y via log10(y) inverse 10**y
+
+set datafile separator '|'
+set xlabel 'number of hosts'
+set ylabel 'number of peers'
+plot '< sqlite3 _db3/test.db "SELECT count(*) FROM report WHERE was_packed = 1;"' using 1:2 pointtype 7 title 'packed reports', \
+     '< sqlite3 _db3/test.db "SELECT count(*) FROM report WHERE was_packed = 0;"' using 1:2 pointtype 7 title 'unpacked reports', \
+

@@ -1,11 +1,12 @@
 use std::error::Error;
 use std::convert::TryInto;
+use serde::{Serialize, Deserialize};
 
 // 2 kinds:
 //  - normal (50 nodes)
 //  - bootstraping (500 - 1000 nodes)
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Contact {
     // bootstrap/version 0/1 fields
     pub id: u128,
@@ -24,7 +25,7 @@ pub struct Contact {
     pub verified: Option<u8>,    
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Nodes {
     pub version: u32,
     pub is_bootstrap: bool,
@@ -104,6 +105,9 @@ pub fn parse(inp: &[u8]) -> Result<Nodes, Box<dyn Error>> {
 
             if bootstrap_edition == 1 {
                 // bootstrap node parsing?
+                // In practice, I haven't found any bootstrap variant nodes.dat around the
+                // internet. Generating them requires compiling emule with special options, and it
+                // seems likely no one bothers.
                 todo!();
             }
         }
