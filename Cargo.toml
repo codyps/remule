@@ -5,6 +5,7 @@ members = [
 	'collect-peers',
 	'emule-proto',
 ]
+resolver = "2"
 
 [profile.release]
 debug = true

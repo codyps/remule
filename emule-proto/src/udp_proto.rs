@@ -739,7 +739,7 @@ pub enum TagType {
 }
 
 impl<'a> TagList<'a> {
-    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &[u8]), Error> {
+    pub fn from_slice(raw: &'a [u8]) -> Result<(Self, &'a [u8]), Error> {
         if raw.len() < 4 {
             return Err(Error::TagListTooShort {
                 need: 4,

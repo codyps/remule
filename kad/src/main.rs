@@ -3,7 +3,7 @@ use async_std::prelude::*;
 use async_std::stream;
 use async_std::sync::Mutex;
 use async_std::task;
-use clap::{crate_authors, crate_name, crate_version, App, Arg};
+use clap::{App, Arg};
 use core::fmt;
 use emule_proto as remule;
 use fmt_extra::Hs;
@@ -341,11 +341,9 @@ impl Kad {
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
-    let matches = App::new(crate_name!())
-        .author(crate_authors!())
-        .version(crate_version!())
+    let matches = App::new("kad")
         .arg(Arg::with_name("bind-addr").index(1).required(true))
-        .arg(Arg::with_name("nodes.dat").short("N").takes_value(true))
+        .arg(Arg::with_name("nodes.dat").short('N').takes_value(true))
         .get_matches();
 
     let a = matches.value_of("bind-addr").unwrap();
