@@ -96,11 +96,7 @@ impl<'a> Packet<'a> {
             Err(Error::PacketTooShort)?;
         }
 
-<<<<<<< HEAD:src/udp_proto.rs
-        Ok(Packet { raw })
-=======
         Ok(Packet { raw: raw.into() })
->>>>>>> 62397024a6e11fefb9da53bd64ebd63b9f9fc7b0:emule-proto/src/udp_proto.rs
     }
 
     pub fn udp_proto(&self) -> Option<UdpProto> {
