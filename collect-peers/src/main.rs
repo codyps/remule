@@ -11,7 +11,6 @@ use sqlx::Executor;
 use std::io;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
-use std::os::raw::{c_int, c_void};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -223,7 +222,7 @@ impl Store {
 
         let v: Option<(String, std::time::SystemTime)> =
             match sqlx::query_as("SELECT version, ts FROM version ORDER BY ts DESC LIMIT 1")
-                .fetch_one(&mut c)
+                .fetch_one(&mut *c)
                 .await
             {
                 Ok((v, ts)) => {
@@ -257,7 +256,7 @@ impl Store {
                                 )
                                 .bind(CURRENT_STORE_VERSION)
                                 .bind(SystemTime::now().as_unix_millis())
-                                .execute(&mut c)
+                                .execute(&mut *c)
                                 .await
                                 .map_err(|source| Error::DbInsertVersion { source })?;
                             }
@@ -427,7 +426,7 @@ impl Store {
                 )
                 .bind(CURRENT_STORE_VERSION)
                 .bind(SystemTime::now().as_unix_millis())
-                .execute(&mut c)
+                .execute(&mut *c)
                 .await
                 .map_err(|source| Error::DbInsertVersion { source })?;
             }

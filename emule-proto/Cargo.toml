@@ -7,7 +7,7 @@ edition = "2021"
 fmt-extra = "0.2.1"
 plain = "0.2"
 num-traits = "0.2"
-enum-primitive-derive = "0.2"
+enum-primitive-derive = "0.3"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"

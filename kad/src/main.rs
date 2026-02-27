@@ -103,7 +103,7 @@ impl KadShared {
     ) -> Result<Self, io::Error> {
         let socket = net::UdpSocket::bind(addrs).await?;
         Ok(Self {
-            _id: rand::rngs::OsRng.gen(),
+            _id: rand::random(),
             socket,
             kad_mut: std::sync::Mutex::new(KadMut::new()),
             bootstraps: Mutex::new(bootstraps),
