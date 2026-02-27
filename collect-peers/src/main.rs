@@ -1,10 +1,8 @@
 use anyhow::Context;
 use clap::Parser;
 use core::fmt;
-use either::Either;
 use emule_proto as remule;
 use fmt_extra::Hs;
-use futures::{Stream, StreamExt, TryStreamExt};
 use humantime::parse_duration;
 use remule::udp_proto::BootstrapRespContact;
 use sqlx::Executor;
