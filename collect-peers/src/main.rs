@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::{net, task, time};
-use tracing::{error, event, warn, Level};
+use tracing::{error, event, Level};
 
 #[derive(Debug, Error)]
 enum Error {
@@ -106,7 +106,9 @@ struct Contact {
     version: Option<u8>,
 
     // the below fields basically only show up right now from importing nodes.dat files
+    #[allow(dead_code)]
     kad_udp_key_ip: Option<u32>,
+    #[allow(dead_code)]
     kad_udp_key_key: Option<u32>,
     // FIXME: figure out what verified means in detail
     verified: Option<u8>,
@@ -533,46 +535,28 @@ impl Store {
     }
 
     pub async fn least_recently_contacted_peer(&self) -> Result<Option<PeerStoreInfo>, Error> {
-        if let Some(peer) = self.peers().next().await {
-            let peer = peer.context("getting next peer failed")?;
-            match peer {
-                Either::Left(_qr) => {
-                    return Ok(None);
-                }
-                Either::Right(peer) => {
-                    return Ok(Some(peer));
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    pub fn peers(
-        &self,
-    ) -> impl Stream<Item = Result<Either<sqlx::sqlite::SqliteQueryResult, PeerStoreInfo>, Error>>
-           + Send
-           + '_ {
         //Pin<Box<dyn futures_core::stream::Stream<Item = Result<either::Either<SqliteQueryResult, SqliteRow>, sqlx::Error>> + Send>> {
         // XXX: LIMIT 1 is a hack to force us to re-run this query so we can avoid having the db
         // locked for a long time, which causes the WAL to continuously grow
-        sqlx::query_as(
+        match sqlx::query_as::<_, (i64, String, String, u16)>(
             "SELECT id, kad_id, ip, udp_port FROM peer ORDER BY last_send_time ASC LIMIT 1",
         )
-        .fetch_many(&self.db)
-        .map_err(|source| Error::DbFetchPeers { source })
-        .map_ok(|x| {
-            x.map_right(
-                // FIXME: using String is a hack around lifetime issues
-                |(id, kad_id, ip, udp_port): (i64, String, String, u16)| PeerStoreInfo {
-                    id: PeerStoreId { id },
-                    _kad_id: kad_id.parse().unwrap(),
-                    addr: {
-                        let ip: std::net::IpAddr = ip.parse().unwrap();
-                        (ip, udp_port).into()
-                    },
+        .fetch_one(&self.db)
+        .await
+        {
+            Err(e) => match e {
+                sqlx::Error::RowNotFound => Ok(None),
+                _ => Err(Error::DbFetchPeers { source: e }),
+            },
+            Ok((id, kad_id, ip, udp_port)) => Ok(Some(PeerStoreInfo {
+                id: PeerStoreId { id },
+                _kad_id: kad_id.parse().unwrap(),
+                addr: {
+                    let ip: std::net::IpAddr = ip.parse().unwrap();
+                    (ip, udp_port).into()
                 },
-            )
-        })
+            })),
+        }
     }
 
     async fn mark_peer_sent(&self, peer: PeerStoreId) -> Result<(), Error> {

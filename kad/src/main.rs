@@ -7,7 +7,6 @@ use clap::{Arg, Command};
 use core::fmt;
 use emule_proto as remule;
 use fmt_extra::Hs;
-use rand::prelude::*;
 use std::collections::hash_map;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -80,6 +79,7 @@ impl KadMut {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Tasks {
     _rx_join: task::JoinHandle<()>,
     _bootstrap_join: task::JoinHandle<()>,
