@@ -3,13 +3,14 @@ use async_std::prelude::*;
 use async_std::stream;
 use async_std::sync::Mutex;
 use async_std::task;
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use core::fmt;
 use emule_proto as remule;
 use fmt_extra::Hs;
 use rand::prelude::*;
 use std::collections::hash_map;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io;
 use std::io::Read;
 use std::sync::Arc;
@@ -341,17 +342,17 @@ impl Kad {
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
-    let matches = App::new("kad")
-        .arg(Arg::with_name("bind-addr").index(1).required(true))
-        .arg(Arg::with_name("nodes.dat").short('N').takes_value(true))
+    let matches = Command::new("kad")
+        .arg(Arg::new("bind-addr").index(1).required(true))
+        .arg(Arg::new("nodes.dat").short('N').num_args(1))
         .get_matches();
 
-    let a = matches.value_of("bind-addr").unwrap();
+    let a = matches.get_one::<String>("bind-addr").unwrap();
 
     let mut bs_nodes = Vec::new();
 
-    if let Some(nodes_path) = matches.values_of("nodes.dat") {
-        for np in nodes_path {
+    if let Some(nodes) = matches.get_many::<OsString>("nodes.dat") {
+        for np in nodes {
             let mut f_nodes = std::fs::File::open(np)?;
             let mut b = Vec::default();
             f_nodes.read_to_end(&mut b)?;

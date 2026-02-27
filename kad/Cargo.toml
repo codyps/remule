@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = "3"
+clap = "4"
 fmt-extra = "0.2.1"
 async-std = { version = "1", features = ["attributes", "unstable"]}
 futures = "0.3"
