@@ -8,8 +8,8 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use humantime::parse_duration;
 use remule::udp_proto::BootstrapRespContact;
 use sqlx::Executor;
-use std::io;
 use std::io::Read;
+use std::io::{self, IsTerminal};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -933,7 +933,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         .with_env_filter(env_filter)
         .with_writer(io::stderr)
         .with_timer(Rfc3339)
-        .with_ansi(atty::is(atty::Stream::Stderr))
+        .with_ansi(io::stderr().is_terminal())
         .init();
 
     let store = Store::new(&opts.db_uri).await?;
