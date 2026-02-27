@@ -10,10 +10,10 @@ emule-proto = { version = "*", path = "../emule-proto" }
 fmt-extra = "0.2.1"
 futures = "0.3"
 humantime = "2"
-rand = "0.8"
+rand = "0.10"
+clap = { version = "4", features = ["derive"] }
 sqlx = { version = "0.6", features = [ "runtime-tokio-rustls", "sqlite", "any", "postgres"] }
-structopt = "0.3"
-thiserror = "1"
+thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }

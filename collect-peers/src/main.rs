@@ -1,4 +1,5 @@
 use anyhow::Context;
+use clap::Parser;
 use core::fmt;
 use either::Either;
 use emule_proto as remule;
@@ -15,7 +16,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use structopt::StructOpt;
 use thiserror::Error;
 use tokio::{net, task, time};
 use tracing::{error, event, warn, Level};
@@ -886,15 +886,15 @@ impl Kad {
     */
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 struct Opt {
     db_uri: String,
 
-    #[structopt(subcommand)]
+    #[command(subcommand)]
     action: Action,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 enum Action {
     /// Take a nodes.dat and feed it's content into our database
     FeedNodesDat { nodes_dat_path: PathBuf },
@@ -902,10 +902,10 @@ enum Action {
     /// Use known peers in the database to collect more peers
     Collect {
         bind_addr: SocketAddr,
-        #[structopt(
+        #[arg(
             long = "send-wait",
             default_value = "1s",
-            parse(try_from_str = parse_duration)
+            value_parser = parse_duration
         )]
         send_wait: Duration,
     },
@@ -923,7 +923,7 @@ impl tracing_subscriber::fmt::time::FormatTime for Rfc3339 {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
-    let opts = Opt::from_args();
+    let opts = Opt::parse();
     let env_filter = tracing_subscriber::filter::EnvFilter::try_from_env("REMULE_LOG")
         .unwrap_or_else(|_| {
             tracing_subscriber::filter::EnvFilter::from("collect_peers=info,emule_proto=info")

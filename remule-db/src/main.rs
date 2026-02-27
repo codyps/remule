@@ -1,26 +1,19 @@
-use clap::{App, Arg, SubCommand};
+use clap::{Arg, Command};
 use emule_proto as remule;
 use std::error::Error;
+use std::ffi::OsString;
 use std::io::Read;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("remule-db")
-        .subcommand(
-            SubCommand::with_name("known2")
-                .arg(Arg::with_name("known2-dat").required(true).index(1)),
-        )
-        .subcommand(
-            SubCommand::with_name("clients")
-                .arg(Arg::with_name("clients-met").required(true).index(1)),
-        )
-        .subcommand(
-            SubCommand::with_name("nodes").arg(Arg::with_name("nodes-dat").required(true).index(1)),
-        )
+    let matches = Command::new("remule-db")
+        .subcommand(Command::new("known2").arg(Arg::new("known2-dat").required(true).index(1)))
+        .subcommand(Command::new("clients").arg(Arg::new("clients-met").required(true).index(1)))
+        .subcommand(Command::new("nodes").arg(Arg::new("nodes-dat").required(true).index(1)))
         .get_matches();
 
     match matches.subcommand() {
         Some(("known2", submatches)) => {
-            for f in submatches.values_of_os("known2-dat").unwrap() {
+            for f in submatches.get_many::<OsString>("known2-dat").unwrap() {
                 match std::fs::File::open(f) {
                     Ok(mut h) => {
                         let mut b = Vec::default();
@@ -34,7 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         Some(("clients", submatches)) => {
-            for f in submatches.values_of_os("clients-met").unwrap() {
+            for f in submatches.get_many::<OsString>("clients-met").unwrap() {
                 match std::fs::File::open(f) {
                     Ok(mut h) => {
                         let mut b = Vec::default();
@@ -48,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         Some(("nodes", submatches)) => {
-            for f in submatches.values_of_os("nodes-dat").unwrap() {
+            for f in submatches.get_many::<OsString>("nodes-dat").unwrap() {
                 match std::fs::File::open(f) {
                     Ok(mut h) => {
                         let mut b = Vec::default();
